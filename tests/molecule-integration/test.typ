@@ -113,7 +113,8 @@
 == Complex Natural Compounds (Simplified)
 
 === Caffeine Skeleton (Simplified)
-#skeletize(molecule("@6((=O)-N(-)-(=O)-@5(-N(-)-=N-=)--N(-)-)"))
+#skeletize(molecule("@6((=O)-N(-)-@5(-N=-N(-)-)=-(=O)-N(-)-)"))
+#skeletize(molecule("@6((=O)-N(-)-@5(-N=-N(-)-=)-(=O)-N(-)-)"))
 
 == Pharmaceutical Skeleton (Simplified)
 

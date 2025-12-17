@@ -28,7 +28,7 @@
     Parsed successfully with #parsed.value.terms.len() nodes
     // #repr(reaction)
     #linebreak()
-    #repr(result)
+    // #repr(result)
     // #linebreak()
   ]
 }
@@ -136,7 +136,9 @@
 #test-parse("CH3-@6-CH3", "Ring in middle of chain")
 #test-parse("CH3-CH2-@6-CH2-CH3", "Ring embedded in chain")
 #test-parse("@6-@5", "Different sized rings connected")
-#test-parse("@6-CH2-@6", "Rings connected by methylene")
+#test-parse("@6--@5", "Different sized rings connected")
+#test-parse("@6-(-@6)-(-@6)-@6", "Rings connected by methylene")
+#test-parse("@3-(-@3)-(-@3)-@3", "Rings connected by methylene")
 
 // Invalid ring notation (expected parse error)
 #test-parse("@", "Asterisk without size")
