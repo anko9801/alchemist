@@ -127,8 +127,10 @@
   )
 
   // first branches of the main chain
+  // Offset by 180deg + zigzag to face opposite to outgoing direction
   if ctx.prev_bond == none and ctx.parent_type == none {
-    angles = angles.map(angle => angle + 180deg)
+    let outgoing = (IUPAC_ANGLES.zigzag)(idx + 1)
+    angles = angles.map(angle => angle + 180deg + outgoing)
   }
 
   return angles
