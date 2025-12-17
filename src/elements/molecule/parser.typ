@@ -48,6 +48,7 @@
 */
 
 #import "../../utils/parser-combinator.typ": *
+#import "generator.typ": process-atom, calc-main-index
 
 // ==================== Utilities ====================
 
@@ -129,7 +130,10 @@
 // key-value pair (e.g., color: red, angle: 45)
 #let key-value-pair-parser = seq(
   identifier, token(":"), some(none-of(")")),
-  map: parts => parts.join()
+  map: parts => {
+    let (id, colon, value) = parts
+    id + colon + value.join()
+  }
 )
 
 #let options-parser = seq(
@@ -246,33 +250,6 @@
   math-text-parser,
 )
 
-// Atoms to math content processor
-#let process-atom(parts) = {
-  let type = parts.type
-
-  if type == "atoms" {
-    let base = parts.parts.map(process-atom)
-    if parts.charge != none {
-      (math.attach(base.join(), tr: eval("$" + parts.charge + "$")),)
-    } else {
-      base
-    }
-  } else if type == "abbreviation" {
-    text(parts.value)
-  } else if type == "math-text" {
-    eval(parts.value)
-  } else if type == "element-group" {
-    math.attach(parts.element, tl: [#parts.isotope], br: [#parts.subscript])
-  } else if type == "parenthetical" {
-    let inner = process-atom(parts.atoms)
-    math.attach([(#inner.join())], br: [#parts.subscript])
-  } else if type == "complex" {
-    let inner = process-atom(parts.atoms)
-    [\[#inner.join()\]]
-  } else {
-    "unkown type: " + type
-  }
-}
 
 #let fragment-parser = seq(
   fragment-content-parser, optional(label-parser), optional(options-parser),
@@ -282,7 +259,8 @@
       type: "fragment",
       atoms: process-atom(content),
       name: label,
-      options: if options != none { options } else { (:) }
+      options: if options != none { options.pairs } else { (:) },
+      main-index: calc-main-index(content),
     )
   }
 )
@@ -311,7 +289,7 @@
       type: "bond",
       symbol: symbol,
       name: label,
-      options: if options != none { options } else { (:) }
+      options: if options != none { options.pairs } else { (:) }
     )
   }
 )
@@ -342,14 +320,10 @@
   optional(options-parser),
   map: parts => {
     let (_, faces, mol, lbl, opts) = parts
-    mol = if mol != none {
-      let (_, mol, _) = mol
-      mol
-    }
     (
       type: "cycle",
       faces: faces,
-      body: mol,
+      body: if mol != none { mol.at(1) } else { none },
       label: lbl,
       options: opts
     )

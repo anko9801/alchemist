@@ -1,5 +1,3 @@
-#import "@preview/cetz:0.2.2"
-
 // relative angles
 #let IUPAC_ANGLES = (
   main_chain_initial: chain_length => if chain_length >= 2 { 30deg } else { 0deg } - 60deg,
@@ -46,15 +44,78 @@
   return (ctx + (current_angle: angle), angle)
 }
 
+// Calculate relative angle for a ring attached to a main chain unit
+// Returns (angle, absolute) tuple, or (none, false) if default behavior should be used
+#let ring-angle(ctx, ring, rings_count, idx) = {
+  if ctx.parent_type == "cycle" {
+    // Inside a cycle - use context info for polycyclic vs hetero detection
+    let outer_faces = ctx.at("outer_cycle_faces", default: none)
+    let outer_bonds = ctx.at("outer_cycle_body_len", default: none)
+
+    // Also check inner ring's bonds vs faces
+    let inner_faces = ring.faces
+    let inner_bonds = if ring.body != none and ring.body.type == "molecule" and ring.body.rest != none {
+      ring.body.rest.len()
+    } else { 0 }
+
+    // Polycyclic: outer or inner has fewer bonds than faces
+    let is_polycyclic = outer_bonds < outer_faces or inner_bonds < inner_faces
+
+    if is_polycyclic {
+      (none, false)
+    } else {
+      // Hetero - use branch angle
+      ((IUPAC_ANGLES.cycle_branch_angles)(outer_faces), false)
+    }
+  } else if ctx.prev_bond != none and ctx.next_bond != none {
+    // MIDDLE of chain - ring goes as a branch
+    let base = 0deg
+    if rings_count > 1 {
+      base = base + 60deg * (idx - (rings_count - 1) / 2)
+    }
+    (base, false)
+  } else if ctx.prev_bond != none or ctx.next_bond != none {
+    // START or END of chain - ring extends parallel to chain direction
+    let (_, chain_idx) = ctx.position.last()
+    let edge = 180deg / ring.faces
+    let base = if ctx.prev_bond == none {
+      // START: extend opposite to chain direction
+      ctx.current_angle + 150deg + edge
+    } else {
+      // END: continue in chain direction
+      // Uses main_chain_initial pattern for consistency
+      let offset = 120deg + (IUPAC_ANGLES.main_chain_initial)(chain_idx) + (IUPAC_ANGLES.zigzag)(chain_idx) / 2
+      ctx.current_angle - offset + edge
+    }
+    if rings_count > 1 {
+      base = base + 60deg * (idx - (rings_count - 1) / 2)
+    }
+    (base, false)
+  } else {
+    (none, false)
+  }
+}
+
 #let branch-angles(ctx, branches) = {
   let (n, idx) = ctx.position.last()
 
+  if branches.len() == 0 { return () }
+
   if ctx.parent_type == "cycle" {
     let (faces, _) = ctx.position.at(-2)
-    return ((IUPAC_ANGLES.cycle_branch_angles)(faces),)
-  }
+    let base_angle = (IUPAC_ANGLES.cycle_branch_angles)(faces)
 
-  if branches.len() == 0 { return () }
+    let branch_count = branches.len()
+    if branch_count == 1 {
+      return (base_angle,)
+    }
+
+    // For multiple branches, spread them symmetrically
+    let spread = 60deg
+    return range(branch_count).map(i => {
+      base_angle + spread * (i - (branch_count - 1) / 2)
+    })
+  }
 
   let bonds = branches.map(b => b.bond)
   if ctx.prev_bond != none { bonds.push(ctx.prev_bond) }
@@ -75,4 +136,12 @@
 
 #let initial-angle(ctx, molecule) = {
   return (IUPAC_ANGLES.main_chain_initial)(molecule.rest.len())
+}
+
+/// Check if angle is vertical (around 90deg or 270deg)
+/// Used to determine when to connect to main atom instead of H
+#let is-vertical-angle(angle) = {
+  let a = calc.rem(angle / 1deg, 360) * 1deg
+  if a < 0deg { a += 360deg }
+  (a > 60deg and a < 120deg) or (a > 240deg and a < 300deg)
 }

@@ -1,5 +1,55 @@
 #import "../links.typ": single, double, triple, cram-filled-right, cram-filled-left, cram-dashed-right, cram-dashed-left, cram-hollow-right, cram-hollow-left
 
+// ============================ Atom Processing ============================
+
+/// Convert parsed atom structure to Typst math content
+#let process-atom(parts) = {
+  let type = parts.type
+
+  if type == "atoms" {
+    let base = parts.parts.map(process-atom)
+    if parts.charge != none {
+      (math.attach(base.join(), tr: eval("$" + parts.charge + "$")),)
+    } else {
+      base
+    }
+  } else if type == "abbreviation" {
+    text(parts.value)
+  } else if type == "math-text" {
+    eval(parts.value)
+  } else if type == "element-group" {
+    math.attach(parts.element, tl: [#parts.isotope], br: [#parts.subscript])
+  } else if type == "parenthetical" {
+    let inner = process-atom(parts.atoms)
+    math.attach([(#inner.join())], br: [#parts.subscript])
+  } else if type == "complex" {
+    let inner = process-atom(parts.atoms)
+    [\[#inner.join()\]]
+  } else {
+    "unknown type: " + type
+  }
+}
+
+/// Extract element names from parsed content and find the first non-H index
+/// Returns the index of the first non-H element (0 if all are H or empty)
+#let calc-main-index(parts) = {
+  // Extract element names recursively
+  let extract(p) = {
+    if p.type == "atoms" { p.parts.map(extract).flatten() }
+    else if p.type == "element-group" { (p.element,) }
+    else if p.type == "parenthetical" or p.type == "complex" { extract(p.atoms) }
+    else if p.type == "abbreviation" or p.type == "math-text" { (p.value,) }
+    else { () }
+  }
+  let elements = extract(parts)
+
+  // Find first non-H index
+  for (idx, el) in elements.enumerate() {
+    if el != "H" { return idx }
+  }
+  0
+}
+
 // ============================ Molecule ============================
 
 #let generate_fragment(node) = (
