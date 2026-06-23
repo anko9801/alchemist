@@ -1,4 +1,4 @@
-#import "@preview/cetz:0.4.1"
+#import "@preview/cetz:0.5.2"
 
 /// Create a lewis function that is then used to draw a lewis
 /// formulae element around the fragment
@@ -12,25 +12,25 @@
     }
     let args = args.named()
     let angle = args.at("angle", default: none)
-		let radius = args.at("radius", default: none)
+    let radius = args.at("radius", default: none)
     (
       angle: angle,
-			radius: radius,
-      draw: (ctx, cetz-ctx) => draw-function(ctx, cetz-ctx, args)
+      radius: radius,
+      draw: (ctx, cetz-ctx) => draw-function(ctx, cetz-ctx, args),
     )
   }
 }
 
 /// draw a sigle electron around the fragment
-/// 
+///
 /// It is possible to change the distance from the center of
-/// the electron with the `gap` argument. 
-/// 
+/// the electron with the `gap` argument.
+///
 /// The position of the electron is set by the `offset` argument. Available values are:
 /// - "top": the electron is placed above the fragment center line
 /// - "bottom": the electron is placed below the fragment center line
 /// - "center": the electron is placed at the fragment center line
-/// 
+///
 /// It is also possible to change the `radius`, `stroke` and `fill` arguments
 /// #example(```
 /// #skeletize({
@@ -56,7 +56,9 @@
     gap
   } else if offset == "bottom" {
     -gap
-  } else if offset != "center" {
+  } else if offset == "center" {
+    0
+  } else {
     panic("Invalid position, expected 'top', 'bottom' or 'center'")
   }
   let fill = args.at("fill", default: ctx.config.lewis-single.fill)
@@ -65,7 +67,7 @@
 })
 
 /// Draw a pair of electron around the fragment
-/// 
+///
 /// It is possible to change the distance from the center of
 /// the electron with the `gap` argument.
 /// It is also possible to change the `radius`, `stroke` and `fill` arguments
@@ -90,7 +92,7 @@
 })
 
 /// Draw a pair of electron liked by a single line
-/// 
+///
 /// It is possible to change the length of the line with the `lenght` argument.
 /// It is also possible to change the `stroke` agument
 /// #example(```
@@ -112,7 +114,7 @@
 
 
 /// Draw a rectangle to denote a lone pair of electrons
-/// 
+///
 /// It is possible to change the height and width of the rectangle with the `height` and `width` arguments.
 /// It is also possible to change the `fill` and `stroke` arguments
 /// #example(```
@@ -129,5 +131,34 @@
   let width = args.at("width", default: ctx.config.lewis-rectangle.width)
   let fill = args.at("fill", default: ctx.config.lewis-rectangle.fill)
   let stroke = args.at("stroke", default: ctx.config.lewis-rectangle.stroke)
-  rect((-width / 2, -height / 2), (width / 2, height / 2), fill: fill, stroke: stroke)
+  rect(
+    (-width / 2, -height / 2),
+    (width / 2, height / 2),
+    fill: fill,
+    stroke: stroke,
+  )
+})
+
+
+/// Draw a positive charge around the fragment
+/// 
+/// #example(```
+/// #skeletize({
+/// 	fragment("A", lewis:(
+///     lewis-charge(charge: $+$, angle: 45deg),
+///   ))
+/// 	single(angle:-2)
+///   fragment("B", lewis:(
+///     lewis-charge(charge: $-$, angle: 45deg),
+///   ))
+/// })
+/// ```)
+#let lewis-charge = build-lewis((ctx, cetz-ctx, args) => {
+  import cetz.draw: *
+  let charge = args.at("charge", default: ctx.config.lewis-charge.charge)
+  let stroke = args.at("stroke", default: ctx.config.lewis-charge.stroke)
+  content((0,0), {
+    set text(fill: stroke) if stroke != none
+    [#charge]
+  }, name:"charge")
 })

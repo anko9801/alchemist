@@ -1,11 +1,19 @@
 #import "../utils/context.typ": *
 #import "../utils/anchors.typ": *
-#import "@preview/cetz:0.4.1"
+#import "@preview/cetz:0.5.2"
 
 #let draw-fragment-text(ctx, mol, pos) = {
-	import cetz.draw: *
-  for (id, eq) in mol.atoms.enumerate() {
+  import cetz.draw: *
+  let id = 0
+  let no-anchor-id = 0
+  let last-anchor-name = none
+  for (eq, anchored) in mol.atoms {
     let name = str(id)
+    if not anchored {
+      name += str(no-anchor-id)
+      no-anchor-id += 1
+    }
+
     let color = if mol.colors != none {
       if type(mol.colors) == color {
         mol.colors
@@ -26,15 +34,15 @@
         "mid-west"
       },
       (
-        if id == 0 {
+        if last-anchor-name == none {
           pos
         } else if mol.vertical {
-          (to: str(id - 1) + ".south", rel: (0, -.2em))
+          (to: last-anchor-name + ".south", rel: (0, -.2em))
         } else {
-          str(id - 1) + ".mid-east"
+          last-anchor-name + ".mid-east"
         }
       ),
-			auto-scale: false,
+      auto-scale: false,
       {
         show math.equation: math.upright
         set text(fill: color) if color != none
@@ -42,15 +50,18 @@
         eq
       },
     )
-    id += 1
+    if anchored {
+      id += 1
+    }
+    last-anchor-name = name
   }
 }
 
 #let draw-fragment-lewis(ctx, group-name, count, lewis) = {
-	if lewis.len() == 0 {
-		return ()
-	}
-	import cetz.draw: *
+  if lewis.len() == 0 {
+    return ()
+  }
+  import cetz.draw: *
   get-ctx(cetz-ctx => {
     for (id, (angle: lewis-angle, radius, draw)) in lewis.enumerate() {
       if (lewis-angle == none) {
@@ -60,18 +71,21 @@
         radius = ctx.config.lewis.radius
       }
       let lewis-angle = angles.angle-correction(lewis-angle)
-      let mol-id = if angles.angle-in-range-inclusive(lewis-angle, 90deg, 270deg) {
+      let mol-id = if angles.angle-in-range-inclusive(
+        lewis-angle,
+        90deg,
+        270deg,
+      ) {
         0
       } else {
         count - 1
       }
       let anchor = fragment-anchor(
-        ctx,
         cetz-ctx,
         lewis-angle,
         group-name,
         str(mol-id),
-        margin: radius,
+        radius,
       )
       scope({
         set-origin(anchor)
@@ -85,10 +99,13 @@
 #let draw-fragment-elements(mol, ctx) = {
   let name = mol.name
   if name in ctx.hooks {
-    panic("Molecule fragment with name " + name + " already exists : " + ctx.hooks.keys().join(", "))
+    panic("Molecule fragment with name " + name + " already exists : " + ctx
+      .hooks
+      .keys()
+      .join(", "))
   }
   ctx.hooks.insert(name, mol)
-  
+
   let (group-anchor, side, coord) = if ctx.last-anchor.type == "coord" {
     ("west", true, ctx.last-anchor.anchor)
   } else if ctx.last-anchor.type == "link" {
@@ -108,7 +125,13 @@
   }
   ctx = context_.set-last-anchor(
     ctx,
-    (type: "fragment", name: name, count: mol.at("count"), vertical: mol.vertical),
+    (
+      type: "fragment",
+      name: name,
+      count: mol.count,
+      vertical: mol.vertical,
+      empty: mol.empty,
+    ),
   )
   if (side) {
     ctx.id += 1
@@ -116,7 +139,7 @@
   (
     ctx,
     {
-			import cetz.draw: *
+      import cetz.draw: *
       group(
         anchor: if side {
           group-anchor
@@ -138,13 +161,18 @@
 }
 
 #let draw-fragment(element, ctx) = {
-	if ctx.first-branch {
-		panic("A molecule fragment can not be the first element in a cycle")
-	}
-	let (ctx, drawing) = draw-fragment-elements(element, ctx)
-	if element.links.len() != 0 {
-		ctx.hooks.insert(ctx.last-anchor.name, element)
-		ctx.hooks-links.push((element.links, ctx.last-anchor.name, true))
-	}
-	(ctx, drawing)
+  if ctx.first-branch {
+    panic("A molecule fragment can not be the first element in a cycle")
+  }
+  let (ctx, drawing) = draw-fragment-elements(element, ctx)
+  if element.links.len() != 0 {
+    ctx.hooks.insert(ctx.last-anchor.name, element)
+    ctx.hooks-links.push((
+      element.links,
+      ctx.last-anchor.name,
+      true,
+      element.empty,
+    ))
+  }
+  (ctx, drawing)
 }

@@ -1,5 +1,5 @@
 /// [ppi:100]
-#import "@preview/cetz:0.4.1": *
+#import "@preview/cetz:0.5.2": *
 #import "../../lib.typ": *
 
 #set page(width: auto, height: auto, margin: 0.5em)
@@ -41,8 +41,8 @@
       "to.north",
       mark: (end: ">", fill: red),
     )
-    plus(atom-sep: 5em)
-    fragment(
+    plus-link(atom-sep: 5em)
+    molecule(
       "B",
       lewis: (
         lewis-double(angle: 180deg),

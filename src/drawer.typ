@@ -1,5 +1,5 @@
 #import "default.typ": default
-#import "@preview/cetz:0.4.1"
+#import "@preview/cetz:0.5.2"
 #import "cetz/process.typ" as custom-process
 #import "utils/utils.typ": *
 #import "utils/anchors.typ": *
@@ -11,6 +11,7 @@
 #import "drawer/parenthesis.typ" as parenthesis
 #import "drawer/hook.typ" as hook
 #import "drawer/operator.typ" as operator
+#import "drawer/hide.typ": draw-hide
 
 #import cetz.draw: *
 
@@ -26,6 +27,8 @@
   relative-angle: 0deg, // current global relative angle
   angle: 0deg, // current global angle
   id: 0, // an id used to name things with an unique name
+  first-molecule: true, // true if we are drawing the first molecule of the current equation
+  first-draw: true, // true if no element of the current molecule has been drawn yet
   // branch
   first-branch: false, // true if the next element is the first in a branch
   // cycle
@@ -36,9 +39,10 @@
   cycle-step-angle: 0deg, // angle between two faces in the cycle
   record-vertex: false, // true if the cycle should keep track of its vertices
   vertex-anchors: (), // list of the cycle vertices
+  hide: false, // true if the current elements should be hidden
 )
 
-#let draw-hooks-links(links, mol-name, ctx, from-mol) = {
+#let draw-hooks-links(links, mol-name, ctx, from-mol, ignore-from-margin) = {
   let hook-id = 0
   for (to-name, (link,)) in links {
     if link.at(mol-name, default: none) == none {
@@ -52,9 +56,14 @@
     if to-hook.type == "fragment" {
       ctx.links.push((
         type: "link",
+        hide: ctx.hide,
         name: link.at("name"),
         from-pos: if from-mol {
-          (name: mol-name, anchor: "mid")
+          if ignore-from-margin {
+            (name: mol-name)
+          } else {
+            (name: mol-name, anchor: "mid")
+          }
         } else {
           mol-name + "-end-anchor"
         },
@@ -67,6 +76,8 @@
         over: link.at("over", default: none),
         override: angles.angle-override(ctx.angle, ctx),
         draw: link.draw,
+        ignore-from-margins: ignore-from-margin,
+        ignore-to-margins: to-hook.empty,
       ))
     } else if to-hook.type == "hook" {
       ctx.links.push((
@@ -75,9 +86,14 @@
         } else {
           "link-hook-link"
         },
+        hide: ctx.hide,
         name: link.at("name"),
         from-pos: if from-mol {
-          (name: mol-name, anchor: "mid")
+          if ignore-from-margin {
+            (name: mol-name)
+          } else {
+            (name: mol-name, anchor: "mid")
+          }
         } else {
           mol-name + "-end-anchor"
         },
@@ -89,6 +105,8 @@
         override: angles.angle-override(ctx.angle, ctx),
         draw: link.draw,
         over: link.at("over", default: none),
+        ignore-from-margins: ignore-from-margin,
+        ignore-to-margins: false,
       ))
     } else {
       panic("Unknown hook type " + ctx.hook.at(to-name).type)
@@ -100,6 +118,7 @@
 #let draw-fragments-and-link(ctx, body) = {
   let fragment-drawing = ()
   let cetz-drawing = ()
+  ctx.first-draw = true
   for element in body {
     if ctx.in-cycle and ctx.faces-count >= ctx.cycle-faces {
       continue
@@ -108,33 +127,63 @@
     let cetz-rec = ()
     if type(element) == function {
       cetz-drawing.push(element)
-    } else if "type" not in element {
-      panic("Element " + repr(element) + " has no type")
-    } else if element.type == "fragment" {
-      (ctx, drawing) = fragment.draw-fragment(element, ctx)
-    } else if element.type == "link" {
-      (ctx, drawing) = link.draw-link(element, ctx)
-    } else if element.type == "branch" {
-      (ctx, drawing, cetz-rec) = branch.draw-branch(element, ctx, draw-fragments-and-link)
-    } else if element.type == "cycle" {
-      (ctx, drawing, cetz-rec) = cycle.draw-cycle(element, ctx, draw-fragments-and-link)
-    } else if element.type == "hook" {
-      ctx = hook.draw-hook(element, ctx)
-    } else if element.type == "parenthesis" {
-      (ctx, drawing, cetz-rec) = parenthesis.draw-parenthesis(
-        element,
-        ctx,
-        draw-fragments-and-link,
-      )
-    } else if element.type == "operator" {
-      (ctx, drawing) = operator.draw-operator(element, fragment-drawing, ctx)
+    } else if type(element) == dictionary {
+      if "type" not in element {
+        panic("Element " + repr(element) + " has no type")
+      } else if element.type == "fragment" {
+        (ctx, drawing) = fragment.draw-fragment(element, ctx)
+      } else if element.type == "link" {
+        (ctx, drawing) = link.draw-link(element, ctx)
+      } else if element.type == "branch" {
+        (ctx, drawing, cetz-rec) = branch.draw-branch(
+          element,
+          ctx,
+          draw-fragments-and-link,
+        )
+      } else if element.type == "cycle" {
+        (ctx, drawing, cetz-rec) = cycle.draw-cycle(
+          element,
+          ctx,
+          draw-fragments-and-link,
+        )
+      } else if element.type == "hook" {
+        ctx = hook.draw-hook(element, ctx)
+      } else if element.type == "parenthesis" {
+        (ctx, drawing, cetz-rec) = parenthesis.draw-parenthesis(
+          element,
+          ctx,
+          draw-fragments-and-link,
+        )
+      } else if element.type == "operator" {
+        (ctx, drawing) = operator.draw-operator(element, fragment-drawing, ctx)
+      } else if element.type == "hide" {
+        (ctx, drawing, cetz-rec) = draw-hide(
+          element,
+          ctx,
+          draw-fragments-and-link,
+        )
+      } else {
+        panic("Unknown element type " + element.type)
+      }
+    } else if type(element) == type([]) {
+      if element.func() == metadata {
+        // ignore metadata
+      } else {
+        panic("Unexpected content element: " + repr(element))
+      }
     } else {
-      panic("Unknown element type " + element.type)
+      panic("Unexpected element type: " + str(
+        type(element),
+      ) + " with value " + repr(element))
     }
     fragment-drawing += drawing
     cetz-drawing += cetz-rec
+    ctx.first-draw = false
   }
-  if ctx.last-anchor.type == "link" and not ctx.last-anchor.at("drew", default: false) {
+  if ctx.last-anchor.type == "link" and not ctx.last-anchor.at(
+    "drew",
+    default: false,
+  ) {
     ctx.links.push(ctx.last-anchor)
     ctx.last-anchor.drew = true
   }
@@ -156,9 +205,9 @@
       panic("Over argument must have a name")
     }
     (
-      name, 
+      name,
       over.at("length", default: link-over-radius),
-      over.at("radius", default: link-over-radius)
+      over.at("radius", default: link-over-radius),
     )
   } else {
     panic("Over must be a string or a dictionary, got " + type(link.at("over")))
@@ -173,10 +222,10 @@
     rotate(angle)
     rect(
       anchor: "center",
-      (to: name + ".0", rel: (-length/2,-radius/2)),
+      (to: name + ".0", rel: (-length / 2, -radius / 2)),
       (rel: (length, radius)),
       fill: color,
-      stroke: color
+      stroke: color,
     )
   })
 }
@@ -186,38 +235,58 @@
     ctx,
     get-ctx(cetz-ctx => {
       for link in ctx.links {
-        let ((from, to), angle) = calculate-link-anchors(ctx, cetz-ctx, link)
-        if ctx.config.debug {
-          circle(from, radius: .1em, fill: red, stroke: red)
-          circle(to, radius: .1em, fill: red, stroke: red)
-        }
-        let length = distance-between(cetz-ctx, from, to)
-        hide(line(from, to, name: link.name))
-        if link.at("over") != none {
-          if type(link.at("over")) == array {
-            for over in link.at("over") {
-              draw-link-over(ctx, link, over, angle)
-            }
-          } else {
-            draw-link-over(ctx, link, link.at("over"), angle)
+        let drawing = {
+          let ((from, to), angle) = calculate-link-anchors(
+            ctx,
+            cetz-ctx,
+            link,
+            ctx.config.fragment-margin,
+          )
+          if ctx.config.debug {
+            circle(from, radius: .1em, fill: red, stroke: red)
+            circle(to, radius: .1em, fill: red, stroke: red)
           }
-        }
+          let length = distance-between(cetz-ctx, from, to)
+          hide(line(from, to, name: link.name))
+          if link.at("over") != none {
+            if type(link.at("over")) == array {
+              for over in link.at("over") {
+                draw-link-over(ctx, link, over, angle)
+              }
+            } else {
+              draw-link-over(ctx, link, link.at("over"), angle)
+            }
+          }
 
-        scope({
-          set-origin(from)
-          rotate(angle)
-          (link.draw)(length, ctx, cetz-ctx, override: link.override)
-        })
+          scope({
+            set-origin(from)
+            rotate(angle)
+            (link.draw)(length, ctx, cetz-ctx, override: link.override)
+          })
+        }
+        if link.hide {
+          hide(drawing)
+        } else {
+          drawing
+        }
       }
     }),
   )
 }
 
 /// set elements names and split the molecule into sub-groups
-#let preprocessing(body, group-id: 0, link-id: 0, operator-id: 0) = {
+#let preprocessing(
+  body,
+  group-id: 0,
+  link-id: 0,
+  operator-id: 0,
+  top-level: true,
+) = {
   let result = ((),)
+  let has_element = false
   for element in body {
     if type(element) == dictionary {
+      has_element = true
       if element.at("name", default: none) == none {
         if element.type == "fragment" {
           element.name = "fragment-" + str(group-id)
@@ -237,6 +306,7 @@
           group-id: group-id,
           link-id: link-id,
           operator-id: operator-id,
+          top-level: false,
         )
         if element.type == "parenthesis" and element.resonance {
           element.body = child-body
@@ -244,15 +314,26 @@
           element.body = child-body.at(0)
         }
       }
-      if element.type == "operator" or (element.type == "parenthesis" and element.resonance) {
+      if element.type == "operator" or (
+        element.type == "parenthesis" and element.resonance
+      ) {
         result.push(element)
         result.push(())
       } else {
         result.at(-1).push(element)
       }
-    } else {
+    } else if type(element) == function {
       result.at(-1).push(element)
+    } else if element == none {
+      // ignore empty elements
+    } else {
+      panic("Unexpected element type: " + str(
+        type(element),
+      ) + " with value " + repr(element))
     }
+  }
+  if top-level and not has_element {
+    panic("The skeletize body must contain at least one element", body)
   }
   (result, group-id, link-id, operator-id)
 }
@@ -271,34 +352,54 @@
         get-ctx(cetz-ctx => {
           let ctx = ctx
           if ctx.last-anchor.type == "coord" {
-            (cetz-ctx, ctx.last-anchor.anchor) = cetz.coordinate.resolve(cetz-ctx, ctx.last-anchor.anchor)
+            (cetz-ctx, ctx.last-anchor.anchor) = cetz.coordinate.resolve(
+              cetz-ctx,
+              ctx.last-anchor.anchor,
+            )
           }
           let last-anchor = ctx.last-anchor
           let (ctx, atoms, cetz-drawing) = draw-fragments-and-link(ctx, body)
-          for (links, name, from-mol) in ctx.hooks-links {
-            ctx = draw-hooks-links(links, name, ctx, from-mol)
+          for (links, name, from-mol, ignore-from-margin) in ctx.hooks-links {
+            ctx = draw-hooks-links(
+              links,
+              name,
+              ctx,
+              from-mol,
+              ignore-from-margin,
+            )
           }
 
           let molecule = {
             atoms
           }
 
-          let (ctx: cetz-ctx, drawables, bounds: molecule-bounds, anchors) = custom-process.many(cetz-ctx, molecule)
-          molecule-bounds = cetz.util.revert-transform(cetz-ctx.transform, molecule-bounds)
+          let (
+            ctx: cetz-ctx,
+            drawables,
+            bounds: molecule-bounds,
+            anchors,
+          ) = custom-process.many(cetz-ctx, molecule)
+          molecule-bounds = cetz.util.revert-transform(
+            cetz-ctx.transform,
+            molecule-bounds,
+          )
 
           let (translate-x, translate-y) = if after-operator {
-            let (_, origin-anchor) = cetz.coordinate.resolve(cetz-ctx, last-anchor.anchor)
+            let (_, origin-anchor) = cetz.coordinate.resolve(
+              cetz-ctx,
+              last-anchor.anchor,
+            )
             (
               origin-anchor.at(0) - molecule-bounds.low.at(0),
-              -origin-anchor.at(1)
-                + (
-                  molecule-bounds.low.at(1) + molecule-bounds.high.at(1)
-                )
-                  / 2,
+              origin-anchor.at(1) - (
+                molecule-bounds.low.at(1) + molecule-bounds.high.at(1)
+              ) / 2,
             )
           } else {
             (0, 0)
           }
+
+
           let transform-matrix = cetz.matrix.transform-translate(
             translate-x,
             translate-y,
@@ -307,7 +408,7 @@
           // panic(anchors)
           for name in anchors {
             let hold-anchors = cetz-ctx.nodes.at(name).anchors
-            cetz-ctx.nodes.at(name).anchors = (name) => {
+            cetz-ctx.nodes.at(name).anchors = name => {
               if name != () {
                 cetz.matrix.mul4x4-vec3(transform-matrix, hold-anchors(name))
               } else {
@@ -329,7 +430,7 @@
             ),
           )
           scope({
-            translate(x: translate-x, y: -translate-y)
+            translate(x: translate-x, y: translate-y)
             draw-link-decoration(ctx).at(1)
             on-layer(2, cetz-drawing)
             let bound-rect = cetz.draw.rect(
@@ -352,12 +453,17 @@
       ctx = op-ctx
       drawable
     } else if body.type == "parenthesis" {
-      let (parenthesis-ctx, drawable) = parenthesis.draw-resonance-parenthesis(body, draw-groups, ctx)
+      let (parenthesis-ctx, drawable) = parenthesis.draw-resonance-parenthesis(
+        body,
+        draw-groups,
+        ctx,
+      )
       ctx = parenthesis-ctx
       drawable
     } else {
       panic("Unexpected element type: " + body.type)
     }
+    ctx.first-molecule = false
   }
   (drawables, ctx)
 }
@@ -374,10 +480,14 @@
   if name == none {
     final-drawing
   } else {
-    group(name: name, anchor: mol-anchor, {
-      anchor("default", (0, 0))
-      final-drawing
-    })
+    group(
+      name: name,
+      anchor: mol-anchor,
+      {
+        anchor("default", (0, 0))
+        final-drawing
+      },
+    )
   }
 }
 
@@ -386,19 +496,38 @@
   if "debug" not in config {
     config.insert("debug", debug)
   }
-  cetz.canvas(debug: debug, background: background, draw-skeleton(config: config, body))
+  cetz.canvas(
+    debug: debug,
+    background: background,
+    draw-skeleton(config: config, body),
+  )
 }
 
 #let skeletize-config(default-config) = {
   let config-function(debug: false, background: none, config: (:), body) = {
-    skeletize(debug: debug, background: background, config: merge-dictionaries(config, default-config), body)
+    skeletize(
+      debug: debug,
+      background: background,
+      config: merge-dictionaries(config, default-config),
+      body,
+    )
   }
   config-function
 }
 
 #let draw-skeleton-config(default-config) = {
   let config-function(config: (:), name: none, mol-anchor: none, body) = {
-    draw-skeleton(config: merge-dictionaries(config, default-config), body)
+    draw-skeleton(
+      config: merge-dictionaries(config, default-config),
+      name: name,
+      mol-anchor: mol-anchor,
+      body,
+    )
   }
   config-function
+}
+
+
+#let hide-drawables(elements) = {
+  return elements
 }

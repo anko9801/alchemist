@@ -1,4 +1,4 @@
-#import "@preview/cetz:0.4.1"
+#import "@preview/cetz:0.5.2"
 #import "../drawer/cram.typ": *
 #import "../utils/utils.typ"
 
@@ -49,7 +49,11 @@
 ///```)
 #let single = build-link((length, ctx, _, args) => {
   import cetz.draw: *
-  line((0, 0), (length, 0), stroke: args.at("stroke", default: ctx.config.single.stroke))
+  line(
+    (0, 0),
+    (length, 0),
+    stroke: args.at("stroke", default: ctx.config.single.stroke),
+  )
 })
 
 /// Draw a double line between two fragments
@@ -73,6 +77,13 @@
 ///   fragment("B")
 /// })
 ///```)
+/// It is also possible to only change the color and width of the
+/// lines seperately with the `stroke-left` and `stroke-right` arguments.
+/// #example(```
+/// #skeletize({
+///   double(stroke: 2pt, stroke-right: red, stroke-left: (dash: "dashed"))
+/// })
+/// ```)
 /// This link also supports an `offset` argument that can be set to `left`, `right` or `center`.
 ///It allows to make either the let side, right side or the center of the double line to be aligned with the link point.
 /// #example(```
@@ -88,7 +99,10 @@
 ///```)
 #let double = build-link((length, ctx, cetz-ctx, args) => {
   import cetz.draw: *
-  let gap = utils.convert-length(cetz-ctx, args.at("gap", default: ctx.config.double.gap)) / 2
+  let gap = utils.convert-length(
+    cetz-ctx,
+    args.at("gap", default: ctx.config.double.gap),
+  ) / 2
   let offset = args.at("offset", default: ctx.config.double.offset)
   let coeff = args.at("offset-coeff", default: ctx.config.double.offset-coeff)
   if coeff < 0 or coeff > 1 {
@@ -98,8 +112,8 @@
     -gap
   } else if offset == "left" {
     gap
-  } else if offset == "center" { 
-    0 
+  } else if offset == "center" {
+    0
   } else {
     panic("Invalid offset value: must be \"left\", \"right\" or \"center\"")
   }
@@ -111,7 +125,10 @@
     } else {
       ((0, -gap + gap-offset), (length, -gap + gap-offset))
     },
-    stroke: args.at("stroke", default: ctx.config.double.stroke),
+    stroke: args.at(
+      "stroke-right",
+      default: args.at("stroke", default: ctx.config.double.stroke),
+    ),
   )
   line(
     ..if offset == "left" {
@@ -120,7 +137,10 @@
     } else {
       ((0, gap + gap-offset), (length, gap + gap-offset))
     },
-    stroke: args.at("stroke", default: ctx.config.double.stroke),
+    stroke: args.at(
+      "stroke-left",
+      default: args.at("stroke", default: ctx.config.double.stroke),
+    ),
   )
 })
 
@@ -145,12 +165,43 @@
 ///   fragment("B")
 /// })
 ///```)
+/// It is also possible to only change the color and width of the
+/// lines seperately with the `stroke-left`, `stroke-center` and `stroke-right` arguments.
+/// #example(```
+/// #skeletize({
+///   triple(stroke: 2pt, stroke-left: red, stroke-center: green, stroke-right: blue)
+/// })
+/// ```)
 #let triple = build-link((length, ctx, cetz-ctx, args) => {
   import cetz.draw: *
-  let gap = utils.convert-length(cetz-ctx, args.at("gap", default: ctx.config.triple.gap))
-  line((0, 0), (length, 0), stroke: args.at("stroke", default: ctx.config.triple.stroke))
-  line((0, -gap), (length, -gap), stroke: args.at("stroke", default: ctx.config.triple.stroke))
-  line((0, gap), (length, gap), stroke: args.at("stroke", default: ctx.config.triple.stroke))
+  let gap = utils.convert-length(
+    cetz-ctx,
+    args.at("gap", default: ctx.config.triple.gap),
+  )
+  line(
+    (0, 0),
+    (length, 0),
+    stroke: args.at(
+      "stroke-left",
+      default: args.at("stroke", default: ctx.config.triple.stroke),
+    ),
+  )
+  line(
+    (0, -gap),
+    (length, -gap),
+    stroke: args.at(
+      "stroke-center",
+      default: args.at("stroke", default: ctx.config.triple.stroke),
+    ),
+  )
+  line(
+    (0, gap),
+    (length, gap),
+    stroke: args.at(
+      "stroke-right",
+      default: args.at("stroke", default: ctx.config.triple.stroke),
+    ),
+  )
 })
 
 /// Draw a filled cram between two fragments with the arrow pointing to the right
@@ -250,7 +301,12 @@
 ///   fragment("B")
 /// })
 ///```)
-#let cram-dashed-right = build-link((length, ctx, cetz-ctx, args) => dashed-cram(
+#let cram-dashed-right = build-link((
+  length,
+  ctx,
+  cetz-ctx,
+  args,
+) => dashed-cram(
   (0, 0),
   (length, 0),
   length,
@@ -294,12 +350,12 @@
 /// #example(````
 /// #skeletize({
 ///   fragment("A")
-///   plus()
+///   plus-link()
 ///   fragment("B")
 /// })
 /// ````)
 /// You can change the filling, size and stroke of the glyph with the `fill`, `size` and `stoke` arguments. The default values are the parent `text` parameters.
-#let plus = build-link((length, ctx, cetz-ctx, args) => {
+#let plus-link = build-link((length, ctx, cetz-ctx, args) => {
   import cetz.draw: *
   content(
     anchor: "mid",
@@ -309,6 +365,6 @@
       set text(stroke: args.stroke) if "stroke" in args
       set text(size: args.size) if "size" in args
       text($+$)
-    }
+    },
   )
 })

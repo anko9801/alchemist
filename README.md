@@ -1,6 +1,6 @@
 [![Typst Package](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FTypsium%2Falchemist%2Fmaster%2Ftypst.toml&query=%24.package.version&prefix=v&logo=typst&label=package&color=239DAD)](https://typst.app/universe/package/alchemist)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue)](https://github.com/Typsium/alchemist/blob/master/LICENSE)
-[![User Manual](https://img.shields.io/badge/manual-.pdf-purple)](https://raw.githubusercontent.com/Robotechnic/alchemist/master/doc/manual.pdf)
+[![User Manual](https://img.shields.io/badge/manual-.pdf-purple)](https://raw.githubusercontent.com/Typsium/alchemist/master/doc/manual.pdf)
 
 # alchemist
 
@@ -45,7 +45,7 @@ Alchemist is a typst package to draw skeletal formulae. It is based on the [chem
   )
 })
 ````
-![links](https://raw.githubusercontent.com/Typsium/alchemist/master/tests/README-graphic1/ref/1.png)
+![example image of a molecule](https://raw.githubusercontent.com/Typsium/alchemist/master/tests/README-graphic1/ref/1.png)
 
 Alchemist uses cetz to draw the molecules. This means that you can draw cetz shapes in the same canvas as the molecules. Like this:
 
@@ -71,23 +71,51 @@ Alchemist uses cetz to draw the molecules. This means that you can draw cetz sha
   )
 })
 ````
-![cetz](https://raw.githubusercontent.com/Typsium/alchemist/master/tests/README-graphic2/ref/1.png)
+![example of a cetz integration](https://raw.githubusercontent.com/Typsium/alchemist/master/tests/README-graphic2/ref/1.png)
 
 ## Usage
 
 To start using alchemist, just use the following code:
 
 ```typ
-#import "@preview/alchemist:0.1.8": *
+#import "@preview/alchemist:0.1.10": *
 
 #skeletize({
   // Your molecule here
 })
 ```
 
-For more information, check the [manual](https://raw.githubusercontent.com/Robotechnic/alchemist/master/doc/manual.pdf).
+For more information, check the [manual](https://raw.githubusercontent.com/Typsium/alchemist/master/doc/manual.pdf).
+
+## Tests
+
+The test suite is managed with [tytanic](https://github.com/typst-community/tytanic).
 
 ## Changelog
+
+### 0.2.0
+
+- Updated cetz to version 0.5.2
+- Updated to compiler 0.14.0
+- Rename `plus` link to `plus-link` to avoid confusion with the `plus` typst symbol
+- Adds a way to specify stoke of individual lines in double and triple links [#31](https://github.com/Typsium/alchemist/pull/31)
+- Fix bugs with touying bindings and `hide` function
+- Fix a bounding box compute issue [#32](https://github.com/Typsium/alchemist/issues/32)
+- It is now allowed to draw empty fragments. This is useful to carbocations/carboanions or add charges without drawing the carbon atom.
+- Remove the `molecule` alias for `fragment`
+
+### 0.1.10
+
+- Added touying bindings in lib.typ to support automatic integration
+- Added a way to ignore charges in the links connection of a fragment with the `ignore-charge` parameter
+- Fix [#27](https://github.com/Typsium/alchemist/issues/27)
+- Fix [#23](https://github.com/Typsium/alchemist/issues/23)
+
+### 0.1.9
+
+- Updated cetz to version 0.4.2
+- Exposed name in lib.typ to be used by other packages
+- Adds a touying support
 
 ### 0.1.8
 

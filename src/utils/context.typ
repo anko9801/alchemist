@@ -19,15 +19,14 @@
 /// Set the last anchor in the context to the given anchor and save it if needed
 #let set-last-anchor(ctx, anchor) = {
   if ctx.last-anchor.type == "link" {
-		let drew = ctx.last-anchor.at("drew", default: false)
-		if drew and anchor.type == "link" and anchor.name == ctx.last-anchor.name {
-			drew = false
-			let _ = ctx.links.pop()
-		}
-		if not drew {
-    	ctx.links.push(ctx.last-anchor)
-		}
-		ctx.last-anchor.drew = true
+    if anchor.type == "fragment" and anchor.empty {
+      ctx.last-anchor.ignore-to-margins = true
+    }
+    let drew = ctx.last-anchor.at("drew", default: false)
+    if not drew {
+      ctx.links.push(ctx.last-anchor)
+    }
+    ctx.last-anchor.drew = true
   }
   (..ctx, last-anchor: anchor)
 }
