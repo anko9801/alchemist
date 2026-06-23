@@ -1,7 +1,7 @@
 #import "@preview/cetz:0.5.2"
 #import "src/default.typ": default
 #import "src/utils/utils.typ"
-#import "src/elements/molecule/molecule.typ": molecule
+#import "src/elements/chem/chem.typ": chem, formula, reaction, rxn-arrow, curly-arrow
 #import "src/drawer.typ"
 #import "src/drawer.typ": skeletize, draw-skeleton, skeletize-config, draw-skeleton-config, hide-drawables
 #import "src/elements/links.typ": *
@@ -116,6 +116,9 @@
     ),
   )
 }
+
+/// Alias of `fragment`: a hand-drawn molecule built from links and fragments.
+#let molecule = fragment
 
 /// === Hooks
 /// Create a hook in the fragment. It allows to connect links to the place where the hook is.

@@ -120,8 +120,14 @@
   let cetz-drawing = ()
   ctx.first-draw = true
   for element in body {
+    // Skip excess elements in cycle, but allow nested cycles and branches
+    // (they represent fused/spiro structures at the closing position)
     if ctx.in-cycle and ctx.faces-count >= ctx.cycle-faces {
-      continue
+      if type(element) == dictionary and element.at("type", default: none) in ("cycle", "branch") {
+        // Allow nested cycles and branches to be processed
+      } else {
+        continue
+      }
     }
     let drawing = ()
     let cetz-rec = ()
