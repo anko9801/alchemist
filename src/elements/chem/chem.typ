@@ -1,13 +1,16 @@
 // High-level declarative molecule API.
 //
 // A DSL / SMILES string is laid out by the Rust+CoordgenLibs WASM engine and
-// drawn by `render.typ`. `chem()` is the one entry point (stand-alone content);
+// drawn by reusing alchemist's own primitives (`skeleton.typ`) plus a thin GR
+// overlay (`decorations.typ`). `chem()` is the one entry point (stand-alone);
 // `reaction()` / `rxn-arrow()` arrange a scheme; `formula()` gives the Hill
 // formula. Electron-pushing arrows are addressed by atom id via chem's `arrows`
 // option, so the user never touches Cetz anchors.
 
 #import "@preview/cetz:0.5.2"
-#import "render.typ": draw-chem
+#import "../../default.typ": default
+#import "skeleton.typ": draw-skeleton-core
+#import "decorations.typ": draw-decorations
 
 // ── WASM engine ──────────────────────────────────────────────────────────────
 // Pipeline: the Rust engine parses the source and emits the integer connectivity
@@ -60,11 +63,22 @@
 /// - ..config (any): layout options (`orientation`, `rotation`) and render options
 ///   (`color`, `lone-pairs`, `aromatic`, `arrows`, `scale`, …)
 /// -> content
-#let chem(source, format: "dsl", name: "mol", ..config) = {
+/// Draw a molecule as CeTZ *drawables* (no canvas), so several molecules,
+/// reaction arrows and cross-molecule electron-pushing arrows can be composed in
+/// one shared `cetz.canvas` (every atom is a named anchor `<name>-a<id>`). This
+/// is the coordinate-world counterpart of placing `draw-skeleton` in a scheme.
+#let draw-chem(source, format: "dsl", name: "mol", ..config) = {
   let (orientation, rotation, render-cfg) = _split-config(config)
   let lay = layout-of(source, format: format, orientation: orientation, rotation: rotation)
-  cetz.canvas(draw-chem(lay, name: name, config: render-cfg))
+  let scale = render-cfg.at("scale", default: default.atom-sep)
+  draw-skeleton-core(lay, name: name, config: render-cfg)
+  draw-decorations(lay, name: name, config: render-cfg, scale: scale)
 }
+
+/// Draw a molecule as stand-alone content (wraps `draw-chem` in a canvas).
+#let chem(source, format: "dsl", name: "mol", ..config) = cetz.canvas(
+  draw-chem(source, format: format, name: name, ..config),
+)
 
 /// Molecular formula (GR-2.4) in Hill order, as formatted content (e.g.
 /// "C₂H₆O"). Accurate for SMILES and simple DSL fragments.
