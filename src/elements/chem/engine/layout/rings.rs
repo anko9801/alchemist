@@ -199,9 +199,10 @@ pub fn ring_inner_dirs(g: &Graph, coords: &[Pt]) -> Vec<(f64, f64)> {
         if b.kind.order() != 2 {
             continue;
         }
-        // GR-1.10: ring double bonds offset toward the ring centroid;
-        // asymmetric acyclic double bonds offset toward the more-substituted side;
-        // symmetric / terminal double bonds stay centered (inner = 0).
+        // GR-1.10: ring double bonds offset toward the ring centroid (the inner
+        // line sits inside the ring). Acyclic double bonds are drawn symmetric
+        // (inner = 0), matching the ChemDraw default — both lines equidistant from
+        // the bond axis, so the bond reads as centred rather than shifted.
         if let Some(ring) = best_ring_for_bond(g, b.a, b.b) {
             let n = ring.len() as f64;
             let cx = ring.iter().map(|&a| coords[a].0).sum::<f64>() / n;
@@ -213,54 +214,9 @@ pub fn ring_inner_dirs(g: &Graph, coords: &[Pt]) -> Vec<(f64, f64)> {
             if l > 1e-6 {
                 dirs[bi] = (vx / l, vy / l);
             }
-        } else {
-            dirs[bi] = asymmetric_offset(g, coords, b.a, b.b);
         }
     }
     dirs
-}
-
-/// GR-1.10.1: pick the perpendicular side of an acyclic double bond that carries
-/// more substituents. Returns (0,0) for symmetric or terminal double bonds.
-fn asymmetric_offset(g: &Graph, coords: &[Pt], a: usize, b: usize) -> (f64, f64) {
-    // cumulated double bonds (allene/cumulene): an sp centre carries two double
-    // bonds; draw the bond centred (symmetric) rather than offset to one side.
-    let doubles_at = |x: usize| {
-        g.adj[x]
-            .iter()
-            .filter(|&&(_, bi)| g.bonds[bi].kind.order() == 2)
-            .count()
-    };
-    if doubles_at(a) >= 2 || doubles_at(b) >= 2 {
-        return (0.0, 0.0);
-    }
-    let pa = coords[a];
-    let pb = coords[b];
-    let (dx, dy) = (pb.0 - pa.0, pb.1 - pa.1);
-    let len = (dx * dx + dy * dy).sqrt();
-    if len < 1e-6 {
-        return (0.0, 0.0);
-    }
-    let (nx, ny) = (-dy / len, dx / len); // perpendicular
-    let mx = (pa.0 + pb.0) / 2.0;
-    let my = (pa.1 + pb.1) / 2.0;
-    let mut net = 0.0;
-    for &c in &[a, b] {
-        for &(v, _) in &g.adj[c] {
-            if v == a || v == b {
-                continue;
-            }
-            let s = (coords[v].0 - mx) * nx + (coords[v].1 - my) * ny;
-            net += s;
-        }
-    }
-    if net > 1e-6 {
-        (nx, ny)
-    } else if net < -1e-6 {
-        (-nx, -ny)
-    } else {
-        (0.0, 0.0)
-    }
 }
 
 fn best_ring_for_bond<'a>(g: &'a Graph, a: usize, b: usize) -> Option<&'a Vec<usize>> {
