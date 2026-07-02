@@ -15,21 +15,20 @@ pub fn orient(g: &Graph, coords: &mut [Pt]) {
     }
     center(coords);
     let pg = principal_group(g);
-
-    // GR-3.3.1: an isolated single ring with no orienting characteristic group is
-    // drawn as a regular polygon resting on a horizontal bottom edge (an upright
-    // square, not a diamond; triangle/pentagon point-up).
-    if pg.is_none() && g.rings.len() == 1 && g.rings[0].len() == g.n() {
-        orient_ring_flat_bottom(&g.rings[0], coords);
-        center(coords);
-        return;
-    }
+    let pring = principal_ring_atoms(g);
 
     // GR-3.1.2/3.1.3: rotate so the principal group points to the right (and,
-    // for ring systems, the ring ends up on the opposite/left side). Falls back
-    // to the longest-axis heuristic when there is no characteristic group.
+    // for ring systems, the ring ends up on the opposite/left side). With no
+    // characteristic group to steer by, rest the principal ring system flat on a
+    // horizontal edge (GR-3.3.1 — works for single *and* fused rings, so
+    // naphthalene et al. sit horizontally); acyclic molecules fall back to the
+    // longest-axis heuristic.
     if !rotate_principal_group_right(g, coords, pg) {
-        rotate_principal_axis(coords);
+        if !pring.is_empty() {
+            orient_ring_system_flat(g, &pring, coords);
+        } else {
+            rotate_principal_axis(coords);
+        }
     }
 
     // Choose the best of the four axis-preserving reflections by a weighted
@@ -191,21 +190,28 @@ fn rotate_principal_group_right(g: &Graph, coords: &mut [Pt], pg: Option<usize>)
     true
 }
 
-/// GR-3.3.1: rotate an isolated ring so its bottom is a horizontal edge — find
-/// the ring edge whose midpoint points most nearly straight down and rotate it
-/// to exactly straight down.
-fn orient_ring_flat_bottom(ring: &[usize], coords: &mut [Pt]) {
+/// GR-3.3.1: rest a ring system flat on a horizontal edge. Over every ring bond
+/// of the principal ring system, find the one whose midpoint points most nearly
+/// straight down from the system centroid and rotate it to exactly straight down,
+/// so the shared long axis of a fused system (naphthalene, indole, …) ends up
+/// horizontal and each hexagon has a flat top and bottom.
+fn orient_ring_system_flat(g: &Graph, ring_atoms: &[usize], coords: &mut [Pt]) {
     use std::f64::consts::PI;
-    let n = ring.len();
-    let cx = ring.iter().map(|&i| coords[i].0).sum::<f64>() / n as f64;
-    let cy = ring.iter().map(|&i| coords[i].1).sum::<f64>() / n as f64;
+    if ring_atoms.is_empty() {
+        return;
+    }
+    let inset: std::collections::HashSet<usize> = ring_atoms.iter().copied().collect();
+    let n = ring_atoms.len() as f64;
+    let cx = ring_atoms.iter().map(|&i| coords[i].0).sum::<f64>() / n;
+    let cy = ring_atoms.iter().map(|&i| coords[i].1).sum::<f64>() / n;
     let mut best_ang = 0.0;
     let mut best_cos = f64::NEG_INFINITY;
-    for k in 0..n {
-        let a = ring[k];
-        let b = ring[(k + 1) % n];
-        let mx = (coords[a].0 + coords[b].0) / 2.0 - cx;
-        let my = (coords[a].1 + coords[b].1) / 2.0 - cy;
+    for b in &g.bonds {
+        if b.ring_ids.is_empty() || !inset.contains(&b.a) || !inset.contains(&b.b) {
+            continue;
+        }
+        let mx = (coords[b.a].0 + coords[b.b].0) / 2.0 - cx;
+        let my = (coords[b.a].1 + coords[b.b].1) / 2.0 - cy;
         let ang = my.atan2(mx);
         // closeness to straight-down (-π/2): maximise cos(ang - (-π/2))
         let c = (ang + PI / 2.0).cos();

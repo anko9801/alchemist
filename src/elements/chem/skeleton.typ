@@ -13,8 +13,12 @@
 #import "../../utils/utils.typ": convert-length
 #import "../../elements/links.typ" as links
 #import "../../elements/lewis.typ": lewis-double, lewis-line, lewis-single
-#import "labels.typ": format-label, element-color, element-groups
-#import "decorations.typ": is-special
+#import "labels.typ": format-label, element-color, element-groups, group-math
+#import "style.typ": chem-defaults
+#import "geometry.typ": box-trim, label-box
+
+// membership test for a bond {from,to} in an unordered atom-pair list
+#let pair-in(list, f, t) = list.any(p => (p.at(0) == f and p.at(1) == t) or (p.at(0) == t and p.at(1) == f))
 
 // A dative/coordination bond: a single line with an arrowhead (GR-1.7).
 #let dative = links.build-link((length, ctx, cetz-ctx, args) => {
@@ -22,23 +26,11 @@
   line((0, 0), (length, 0), stroke: args.at("stroke", default: ctx.config.single.stroke), mark: (end: ">"))
 })
 
-// GR double bond. `side` (+1/-1) puts the second line toward the ring centroid as
-// a shortened inner line (skeletal convention); `side: 0` draws it symmetric (for
-// non-ring double bonds, e.g. C=O). Matches the previous renderer's clean style
-// rather than alchemist's full-length offset, which looks cramped in small rings.
-#let gr-double(side) = links.build-link((length, ctx, cetz-ctx, args) => {
-  import cetz.draw: *
-  let stroke = args.at("stroke", default: ctx.config.double.stroke)
-  let g = convert-length(cetz-ctx, args.at("gap", default: ctx.config.double.gap))
-  if side == 0 {
-    line((0, g / 2), (length, g / 2), stroke: stroke)
-    line((0, -g / 2), (length, -g / 2), stroke: stroke)
-  } else {
-    let sh = g * 1.4 // shorten the inner line at both ends
-    line((0, 0), (length, 0), stroke: stroke)
-    line((sh, side * g), (length - sh, side * g), stroke: stroke)
-  }
-})
+// A double bond maps onto alchemist's own `double` link via its `offset` option:
+// "center" for a symmetric (acyclic) bond, "left"/"right" to put the shortened
+// inner line on the ring-centroid side. Returns the offset for a given engine
+// `inner` vector expressed in the bond-local frame (z = cross(bond, inner)).
+#let double-offset(z, zero) = if zero { "center" } else if z > 0 { "left" } else { "right" }
 
 // engine bond `kind` -> alchemist link function. Wedges are swapped right<->left:
 // the engine names a wedge narrow-at-`from` (the stereocentre), while alchemist's
@@ -61,11 +53,6 @@
 #let is-labeled(atom, cfg) = {
   not atom.skeletal or (cfg.show-all-h and atom.at("implicit_h", default: 0) > 0)
 }
-
-// Uniform gap kept between an atom label and the bonds touching it: each bond is
-// trimmed to the edge of the measured label box plus this margin, so the same
-// breathing room surrounds every atom (glyph-aware, ChemDraw ~1.6pt @ 10pt).
-#let label-clearance = 0.18em
 
 // Build a native alchemist fragment dict for one engine atom.
 #let atom-fragment(atom, name, cfg) = {
@@ -97,7 +84,7 @@
     if g != none {
       let heavy = g.filter(x => x.sym == atom.element)
       let groups = heavy + g.filter(x => x.sym != atom.element)
-      let atoms = groups.map(gp => ({ text(gp.sym); if gp.sub != "" { sub(gp.sub) } }, true))
+      let atoms = groups.map(gp => (group-math(gp.sym, gp.sub), true))
       return (
         type: "fragment", name: name, atoms: atoms, colors: colors,
         links: (:), lewis: lewis, vertical: true, count: groups.len(), empty: false,
@@ -113,7 +100,7 @@
     let heavy = g.filter(x => x.sym == atom.element)
     let rest = g.filter(x => x.sym != atom.element)
     let groups = if reversed { rest + heavy } else { heavy + rest }
-    let atoms = groups.map(gp => ({ text(gp.sym); if gp.sub != "" { sub(gp.sub) } }, true))
+    let atoms = groups.map(gp => (group-math(gp.sym, gp.sub), true))
     return (
       type: "fragment", name: name, atoms: atoms, colors: colors,
       links: (:), lewis: lewis, vertical: false, count: groups.len(), empty: false,
@@ -128,25 +115,14 @@
 
 // Render a LayoutOut to CeTZ drawables (compose inside any canvas).
 #let draw-skeleton-core(layout, name: "mol", config: (:)) = {
-  let cfg = (
-    // one engine bond-length unit maps to alchemist's `atom-sep`, so generated
-    // molecules sit at the same scale as hand-drawn ones. Resolved to canvas-unit
-    // floats at draw time (a plain number is used as-is). Styling (strokes,
-    // margins, lewis, colours) is shared via alchemist's `default` config.
-    scale: default.atom-sep,
-    label-margin: 0.16em, // clearance beyond the label bbox (ChemDraw ~1.6pt @ 10pt)
-    color: false,
-    atom-colors: (:),
-    lone-pairs: none,
-    show-all-h: false,
-    vertical: (),
-    oxidation: (:),
-    delocalize: (),
-    bent: (),
-    pseudo: (),
-  ) + config
+  let cfg = chem-defaults + config
+  // one shared alchemist config so every alchemist link (single/double/triple/
+  // cram/dative) strokes at the same weight as the manual special-bond styles
   let alch = default
   alch.fragment-color = none
+  alch.single.stroke = cfg.stroke
+  alch.double.stroke = cfg.stroke
+  alch.triple.stroke = cfg.stroke
 
   let aname(i) = name + "-a" + str(i)
   let atom(i) = layout.atoms.at(i)
@@ -189,28 +165,19 @@
     cetz.draw.get-ctx(cetz-ctx => {
       import cetz.draw: *
       let s = if type(cfg.scale) == length { convert-length(cetz-ctx, cfg.scale) } else { cfg.scale }
-      let margin = convert-length(cetz-ctx, label-clearance)
+      let margin = convert-length(cetz-ctx, cfg.label-clearance)
       let lctx = (..default-ctx, config: alch)
-      // label box of atom `i` expressed relative to its coordinate (canvas units)
-      let box-of(i) = {
-        if not is-labeled(atom(i), cfg) { return none }
-        let (_, nw) = cetz.coordinate.resolve(cetz-ctx, (name: aname(i), anchor: "north-west"))
-        let (_, se) = cetz.coordinate.resolve(cetz-ctx, (name: aname(i), anchor: "south-east"))
-        let cx = atom(i).pos.x * s
-        let cy = atom(i).pos.y * s
-        (x0: nw.at(0) - cx, x1: se.at(0) - cx, y0: se.at(1) - cy, y1: nw.at(1) - cy)
-      }
-      // distance from the coordinate to where the ray (ux,uy) leaves the box, + margin
-      let trim(bx, ux, uy) = {
-        if bx == none { return 0 }
-        let big = 1e6
-        let tx = if ux > 1e-6 { bx.x1 / ux } else if ux < -1e-6 { bx.x0 / ux } else { big }
-        let ty = if uy > 1e-6 { bx.y1 / uy } else if uy < -1e-6 { bx.y0 / uy } else { big }
-        calc.min(tx, ty) + margin
-      }
-      let boxes = layout.atoms.map(a => box-of(a.id))
+      // label box of each atom relative to its coordinate (none for bare vertices)
+      let boxes = layout.atoms.map(a => if is-labeled(a, cfg) {
+        label-box(cetz-ctx, aname(a.id), a.pos.x * s, a.pos.y * s)
+      } else { none })
+      let trim(bx, ux, uy) = box-trim(bx, ux, uy, margin)
+      let stroke = cfg.stroke
+      let dashed = (paint: black, thickness: stroke.thickness, dash: "dashed")
+      // delocalized inner line reuses the *same* offset as a real double bond
+      let g = convert-length(cetz-ctx, alch.double.gap)
+      let bent-off = cfg.bent-kink * s
       for b in layout.bonds {
-        if is-special(cfg, b.from, b.to) { continue }
         let a = (atom(b.from).pos.x * s, atom(b.from).pos.y * s)
         let c = (atom(b.to).pos.x * s, atom(b.to).pos.y * s)
         let dx = c.at(0) - a.at(0)
@@ -222,17 +189,44 @@
         let len2 = len - ta - tc
         if len2 <= 0 { continue }
         let a2 = (a.at(0) + ux * ta, a.at(1) + uy * ta)
-        let drawer = if b.kind == "double" {
-          let z = dx * b.inner.y - dy * b.inner.x
-          let side = if b.inner.x == 0 and b.inner.y == 0 { 0 } else if z > 0 { 1 } else { -1 }
-          gr-double(side)
-        } else {
-          link-fn.at(b.kind, default: links.single)
-        }
+        // z = cross(bond, inner): the side the offset/inner line goes to
+        let z = dx * b.inner.y - dy * b.inner.x
+        let side = if z > 0 { 1 } else { -1 }
+        // everything is drawn in the bond-local frame: origin at the trimmed start,
+        // +x along the bond over `len2`, +y perpendicular (left).
         scope({
           set-origin(a2)
           rotate(calc.atan2(dx, dy))
-          (drawer().first().draw)(len2, lctx, cetz-ctx)
+          if cfg.aromatic == "circle" and b.at("aromatic", default: false) {
+            // GR-6 circle mode: aromatic ring bonds are plain single lines
+            line((0, 0), (len2, 0), stroke: stroke)
+          } else if pair-in(cfg.delocalize, b.from, b.to) {
+            // GR-6 partial (delocalized) bond: solid line + dashed inner line
+            line((0, 0), (len2, 0), stroke: stroke)
+            line((g, side * g), (len2 - g, side * g), stroke: dashed)
+          } else if pair-in(cfg.bent, b.from, b.to) {
+            // GR-1.5 bent bond: a perpendicular kink at the midpoint
+            line((0, 0), (len2 / 2, bent-off), (len2, 0), stroke: stroke)
+          } else if pair-in(cfg.pseudo, b.from, b.to) {
+            // GR-12 pseudobond: a wavy connector
+            let waves = int(calc.max(3, calc.round(len2 / (cfg.wave-period * s))))
+            let amp = cfg.wave-amplitude * s
+            let steps = waves * 6
+            let pts = range(steps + 1).map(k => {
+              let t = k / steps
+              (t * len2, calc.sin(t * waves * calc.pi) * amp)
+            })
+            line(..pts, stroke: stroke)
+          } else {
+            // ordinary bond via alchemist's own link functions
+            let (link, override) = if b.kind == "double" {
+              let zero = b.inner.x == 0 and b.inner.y == 0
+              (links.double, (offset: double-offset(z, zero)))
+            } else {
+              (link-fn.at(b.kind, default: links.single), (:))
+            }
+            (link().first().draw)(len2, lctx, cetz-ctx, override: override)
+          }
         })
       }
     })

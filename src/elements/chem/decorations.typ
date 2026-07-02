@@ -1,87 +1,36 @@
-// Non-bond GR decorations drawn as a thin overlay on top of the shared
-// skeleton (skeleton.typ). Everything here is a pure coordinate overlay that has
-// no counterpart in alchemist's link/fragment drawing: ionic dotted bonds,
-// brackets, aromatic circles, electron-pushing arrows, partial/oxidation charges,
-// hapto / variable-attachment, and the special bond *styles* (delocalized, bent,
-// wavy) that replace a plain bond.
+// Non-bond GR decorations drawn as an overlay on top of the shared skeleton
+// (skeleton.typ). Everything here is a pure coordinate overlay that has no
+// counterpart in alchemist's link/fragment drawing: ionic dotted bonds, brackets,
+// aromatic circles, electron-pushing arrows, partial/oxidation charges, and
+// hapto / variable-attachment lines. Bonds themselves — including the special
+// styles (delocalized, bent, wavy) — are all drawn by skeleton.typ, at the shared
+// `bond-stroke` weight, so nothing here re-draws or re-weights a bond.
 
 #import "@preview/cetz:0.5.2"
 #import cetz.draw: *
 #import "../../utils/utils.typ": convert-length
 #import "labels.typ": element-color
+#import "style.typ": chem-defaults
+#import "geometry.typ": box-trim, label-box
 
-// bond styles handled here instead of by the skeleton's normal link drawing.
-#let is-special(cfg, f, t) = {
-  let has(list) = list.any(p => (p.at(0) == f and p.at(1) == t) or (p.at(0) == t and p.at(1) == f))
-  has(cfg.at("delocalize", default: ())) or has(cfg.at("bent", default: ())) or has(cfg.at("pseudo", default: ()))
-}
-
-#let draw-decorations(layout, name: "mol", config: (:), scale: 1.6) = {
-  let cfg = (
-    stroke: 0.06em + black,
-    double-gap: 0.13,
-    double-shorten: 0.16,
-    color: false,
-    atom-colors: (:),
-    aromatic: none,
-    aromatic-radius: 0.62,
-    oxidation: (:),
-    ionic-bonds: false,
-    script-size: 0.85em,
-    brackets: none,
-    delocalize: (),
-    variable-attach: (),
-    bent: (),
-    bent-offset: 0.3,
-    multi-centre: (),
-    pseudo: (),
-    partial-charge: (:),
-    arrows: (),
-    arrow-paint: rgb("#c00"),
-  ) + config
+#let draw-decorations(layout, name: "mol", config: (:)) = {
+  let cfg = chem-defaults + config
   get-ctx(ctx => {
   // resolve a font-relative bond length (e.g. atom-sep = 3em) to canvas-unit
   // floats so the manual vector geometry below stays float-valued.
-  let s = if type(scale) == length { convert-length(ctx, scale) } else { scale }
+  let s = if type(cfg.scale) == length { convert-length(ctx, cfg.scale) } else { cfg.scale }
   let stroke = cfg.stroke
+  let margin = convert-length(ctx, cfg.label-clearance)
   let P(i) = (layout.atoms.at(i).pos.x * s, layout.atoms.at(i).pos.y * s)
-  let g = cfg.double-gap * s
-  let sh = cfg.double-shorten * s
-
-  // ── special bond styles (replace the plain bond) ──────────────────────────
-  for b in layout.bonds {
-    let key(list) = list.any(p => (p.at(0) == b.from and p.at(1) == b.to) or (p.at(0) == b.to and p.at(1) == b.from))
-    let a = P(b.from)
-    let c = P(b.to)
-    let dx = c.at(0) - a.at(0)
-    let dy = c.at(1) - a.at(1)
+  // start point of a line leaving atom `from` toward (tx, ty), pulled back to
+  // clear `from`'s label — same rule the bonds use, so overlay lines never run
+  // into a glyph.
+  let from-edge(from, tx, ty) = {
+    let a = P(from)
+    let (dx, dy) = (tx - a.at(0), ty - a.at(1))
     let len = calc.max(calc.sqrt(dx * dx + dy * dy), 1e-9)
-    let (ux, uy) = (dx / len, dy / len)
-    let (nx, ny) = (-uy, ux)
-    if key(cfg.pseudo) {
-      let waves = int(calc.max(3, calc.round(len / (0.18 * s))))
-      let amp = 0.09 * s
-      let steps = waves * 6
-      let pts = range(steps + 1).map(k => {
-        let t = k / steps
-        let q = calc.sin(t * waves * calc.pi) * amp
-        (a.at(0) + ux * len * t + nx * q, a.at(1) + uy * len * t + ny * q)
-      })
-      line(..pts, stroke: stroke)
-    } else if key(cfg.bent) {
-      let mid = ((a.at(0) + c.at(0)) / 2 + nx * cfg.bent-offset * s, (a.at(1) + c.at(1)) / 2 + ny * cfg.bent-offset * s)
-      line(a, mid, c, stroke: stroke)
-    } else if key(cfg.delocalize) {
-      let sgn = if b.inner.x != 0 or b.inner.y != 0 {
-        if b.inner.x * nx + b.inner.y * ny < 0 { -1 } else { 1 }
-      } else { 1 }
-      line(a, c, stroke: stroke)
-      line(
-        (a.at(0) + nx * g * sgn + ux * sh, a.at(1) + ny * g * sgn + uy * sh),
-        (c.at(0) + nx * g * sgn - ux * sh, c.at(1) + ny * g * sgn - uy * sh),
-        stroke: (paint: black, thickness: stroke.thickness, dash: "dashed"),
-      )
-    }
+    let t = box-trim(label-box(ctx, name + "-a" + str(from), a.at(0), a.at(1)), dx / len, dy / len, margin)
+    (a.at(0) + dx / len * t, a.at(1) + dy / len * t)
   }
 
   // ── GR-7.1 ionic dotted bonds between disconnected components ──────────────
@@ -127,7 +76,9 @@
     let cx = ring-ids.map(i => P(i).at(0)).sum() / nn
     let cy = ring-ids.map(i => P(i).at(1)).sum() / nn
     let a = P(from)
-    line(a, (a.at(0) + (cx - a.at(0)) * 0.7, a.at(1) + (cy - a.at(1)) * 0.7), stroke: stroke)
+    let f = cfg.attach-fraction
+    let end = (a.at(0) + (cx - a.at(0)) * f, a.at(1) + (cy - a.at(1)) * f)
+    line(from-edge(from, cx, cy), end, stroke: stroke)
   }
 
   // ── GR-1.9 multi-centre (hapto / η) bond to a centroid ─────────────────────
@@ -135,13 +86,13 @@
     let nn = ids.len()
     let cx = ids.map(i => P(i).at(0)).sum() / nn
     let cy = ids.map(i => P(i).at(1)).sum() / nn
-    line(P(from), (cx, cy), stroke: stroke)
+    line(from-edge(from, cx, cy), (cx, cy), stroke: stroke)
   }
 
   // ── GR-6 aromatic delocalization circles ──────────────────────────────────
   if cfg.aromatic == "circle" {
     for ring in layout.at("aromatic_rings", default: ()) {
-      circle((ring.center.x * s, ring.center.y * s), radius: ring.radius * s * cfg.aromatic-radius, stroke: stroke)
+      circle((ring.center.x * s, ring.center.y * s), radius: ring.radius * s * cfg.aromatic-inset, stroke: stroke)
     }
   }
 
@@ -149,7 +100,7 @@
   for (id, sign) in cfg.partial-charge {
     let a = P(int(id))
     let sg = if sign == "+" { "+" } else { "−" }
-    content((a.at(0), a.at(1) + 0.42 * s), text(size: cfg.script-size * 1.1, [δ] + super(size: cfg.script-size, sg)))
+    content((a.at(0), a.at(1) + cfg.charge-rise * s), text(size: cfg.script-size * 1.1, [δ] + super(size: cfg.script-size, sg)))
   }
 
   // ── electron-pushing curly arrows (addressed by atom id) ───────────────────
@@ -162,29 +113,29 @@
     let len = calc.max(calc.sqrt(dx * dx + dy * dy), 1e-9)
     let (ux, uy) = (dx / len, dy / len)
     let (px, py) = (-uy * side, ux * side)
-    let (off, bend, pad) = (0.3 * s, 0.55 * s, 0.16 * s)
+    let (off, bend, pad) = (cfg.arrow.offset * s, cfg.arrow.bend * s, cfg.arrow.pad * s)
     let p0 = (a.at(0) + ux * pad + px * off, a.at(1) + uy * pad + py * off)
     let p3 = (b.at(0) - ux * pad * 0.2 + px * off * 0.55, b.at(1) - uy * pad * 0.2 + py * off * 0.55)
     let c1 = (p0.at(0) + ux * len * 0.2 + px * bend, p0.at(1) + uy * len * 0.2 + py * bend)
     let c2 = (p3.at(0) + px * bend, p3.at(1) + py * bend)
-    bezier(p0, p3, c1, c2, stroke: 0.7pt + cfg.arrow-paint, mark: (end: ">", scale: 0.85))
+    bezier(p0, p3, c1, c2, stroke: (paint: cfg.arrow.paint, thickness: stroke.thickness), mark: (end: ">", scale: 0.85))
   }
 
   // ── GR-5.7 enclose a polyatomic ion in brackets ───────────────────────────
   if cfg.brackets != none {
     let xs = layout.atoms.map(a => a.pos.x * s)
     let ys = layout.atoms.map(a => a.pos.y * s)
-    let pad = 0.45 * s
+    let pad = cfg.bracket-pad * s
     let (x0, x1) = (calc.min(..xs) - pad, calc.max(..xs) + pad)
     let (y0, y1) = (calc.min(..ys) - pad, calc.max(..ys) + pad)
-    let tick = 0.22 * s
+    let tick = cfg.bracket-tick * s
     line((x0 + tick, y1), (x0, y1), (x0, y0), (x0 + tick, y0), stroke: stroke)
     line((x1 - tick, y1), (x1, y1), (x1, y0), (x1 - tick, y0), stroke: stroke)
     let q = cfg.brackets
     if q != 0 {
       let m = calc.abs(q)
       let sg = if q > 0 { "+" } else { "−" }
-      content((x1 + 0.12 * s, y1), text(super(size: cfg.script-size, (if m > 1 { str(m) } else { "" }) + sg)), anchor: "south-west")
+      content((x1 + tick / 2, y1), text(super(size: cfg.script-size, (if m > 1 { str(m) } else { "" }) + sg)), anchor: "south-west")
     }
   }
   })

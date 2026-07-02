@@ -8,7 +8,6 @@
 // option, so the user never touches Cetz anchors.
 
 #import "@preview/cetz:0.5.2"
-#import "../../default.typ": default
 #import "skeleton.typ": draw-skeleton-core
 #import "decorations.typ": draw-decorations
 
@@ -70,9 +69,8 @@
 #let draw-chem(source, format: "dsl", name: "mol", ..config) = {
   let (orientation, rotation, render-cfg) = _split-config(config)
   let lay = layout-of(source, format: format, orientation: orientation, rotation: rotation)
-  let scale = render-cfg.at("scale", default: default.atom-sep)
   draw-skeleton-core(lay, name: name, config: render-cfg)
-  draw-decorations(lay, name: name, config: render-cfg, scale: scale)
+  draw-decorations(lay, name: name, config: render-cfg)
 }
 
 /// Draw a molecule as stand-alone content (wraps `draw-chem` in a canvas).

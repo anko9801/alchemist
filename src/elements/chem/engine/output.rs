@@ -153,17 +153,22 @@ pub fn build(g: &Graph) -> LayoutOut {
         .enumerate()
         .filter(|(ri, _)| arom[*ri])
         .map(|(_, r)| {
-            let n = r.len() as f64;
-            let cx = r.iter().map(|&a| g.nodes[a].pos.unwrap_or((0.0, 0.0)).0).sum::<f64>() / n;
-            let cy = r.iter().map(|&a| g.nodes[a].pos.unwrap_or((0.0, 0.0)).1).sum::<f64>() / n;
-            let rad = r
-                .iter()
-                .map(|&a| {
-                    let p = g.nodes[a].pos.unwrap_or((0.0, 0.0));
-                    ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt()
+            let n = r.len();
+            let nf = n as f64;
+            let cx = r.iter().map(|&a| g.nodes[a].pos.unwrap_or((0.0, 0.0)).0).sum::<f64>() / nf;
+            let cy = r.iter().map(|&a| g.nodes[a].pos.unwrap_or((0.0, 0.0)).1).sum::<f64>() / nf;
+            // apothem (inscribed-circle radius): mean distance from the centroid to
+            // the bond midpoints, so the GR-6 circle sits on the edges regardless of
+            // ring size or slight irregularity.
+            let rad = (0..n)
+                .map(|k| {
+                    let p = g.nodes[r[k]].pos.unwrap_or((0.0, 0.0));
+                    let q = g.nodes[r[(k + 1) % n]].pos.unwrap_or((0.0, 0.0));
+                    let (mx, my) = ((p.0 + q.0) / 2.0, (p.1 + q.1) / 2.0);
+                    ((mx - cx).powi(2) + (my - cy).powi(2)).sqrt()
                 })
                 .sum::<f64>()
-                / n;
+                / nf;
             RingOut {
                 center: Vec2::new(cx, cy),
                 radius: rad,

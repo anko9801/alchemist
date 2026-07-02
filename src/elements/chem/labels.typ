@@ -16,20 +16,36 @@
   cpk-colors.at(elem, default: black)
 }
 
-// ── label text: subscript digit runs, charge superscript ────────────────────
-#let render-formula(text, script-size: 0.85em) = {
-  let parts = ()
-  let buf = ""
-  for ch in text.clusters() {
+// ── label typesetting (math mode) ────────────────────────────────────────────
+// Labels are built as math content so subscripts, isotope/charge superscripts and
+// the ± signs get real math typography (the fragment drawer applies
+// `math.upright`, so element symbols stay roman). Strings are spliced with `[#..]`
+// so multi-letter symbols like "Cl" stay together and render upright.
+
+// one element group (symbol + optional subscript count) as math content
+#let group-frag(sym, sub) = if sub == "" { [#sym] } else { math.attach([#sym], br: [#sub]) }
+
+// the same, wrapped as a standalone equation for one placed sub-atom
+#let group-math(sym, sub) = math.equation(block: false, group-frag(sym, sub))
+
+// a condensed formula as math content: each maximal non-digit run is a base and
+// the digit run that follows it becomes its subscript ("CH2OH" -> C H_2 O H).
+#let formula-frag(formula) = {
+  let frags = ()
+  let (t, d) = ("", "")
+  for ch in formula.clusters() {
     if ch >= "0" and ch <= "9" {
-      if buf != "" { parts.push(buf); buf = "" }
-      parts.push(sub(size: script-size, ch))
+      d += ch
     } else {
-      buf += ch
+      if d != "" {
+        frags.push((t, d))
+        (t, d) = ("", "")
+      }
+      t += ch
     }
   }
-  if buf != "" { parts.push(buf) }
-  parts.join()
+  frags.push((t, d))
+  frags.map(((t, d)) => group-frag(t, d)).join()
 }
 
 // Split a simple condensed formula into element groups (sym + subscript count).
@@ -78,26 +94,26 @@
 
 // GR-2.1.6: reversed labels read the element groups in reverse (CH3 -> H3C),
 // keeping each subscript with its element. `reversed` only applies to simple
-// element-only labels.
-#let format-label(atom, reversed: false, oxidation: none, script-size: 0.85em) = {
+// element-only labels. Isotope is a left superscript (GR-2.1.3); oxidation
+// number (GR-2.1.4) and formal charge are right superscripts.
+#let format-label(atom, reversed: false, oxidation: none) = {
   let groups = element-groups(atom.text)
-  let body = if reversed and groups != none {
-    groups.rev().map(g => g.sym + if g.sub != "" { sub(size: script-size, g.sub) }).join()
+  let base = if reversed and groups != none {
+    groups.rev().map(g => group-frag(g.sym, g.sub)).join()
   } else {
-    render-formula(atom.text, script-size: script-size)
+    formula-frag(atom.text)
   }
-  // GR-2.1.3: isotope as a left superscript
-  if atom.isotope != none {
-    body = super(size: script-size, str(atom.isotope)) + body
+  let tl = if atom.isotope != none { [#str(atom.isotope)] } else { none }
+  let tr = {
+    let s = if oxidation != none { roman(oxidation) } else { "" }
+    if atom.charge != 0 {
+      let n = calc.abs(atom.charge)
+      s += (if n > 1 { str(n) } else { "" }) + (if atom.charge > 0 { "+" } else { "−" })
+    }
+    if s != "" { [#s] } else { none }
   }
-  // GR-2.1.4: oxidation number as a superscript Roman numeral
-  if oxidation != none {
-    body = body + super(size: script-size, roman(oxidation))
-  }
-  if atom.charge != 0 {
-    let n = calc.abs(atom.charge)
-    let sign = if atom.charge > 0 { "+" } else { "−" }
-    body = body + super(size: script-size, (if n > 1 { str(n) } else { "" }) + sign)
-  }
-  body
+  math.equation(
+    block: false,
+    if tl == none and tr == none { base } else { math.attach(base, tl: tl, tr: tr) },
+  )
 }
