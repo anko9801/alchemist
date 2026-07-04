@@ -1,10 +1,10 @@
-//! 2D coordinate layout: ring perception + IUPAC canonical orientation applied
-//! on top of externally-supplied (CoordgenLibs) coordinates. CoordGen owns the
-//! hard geometry; this module owns SSSR ring perception (Brecher GR double-bond
-//! sides / aromatic / labels), the IUPAC GR-3 orientation pass, and stereo.
+//! 2D coordinate layout on top of externally-supplied (CoordgenLibs) coordinates
+//! and rings. CoordGen owns the hard geometry *and* ring perception (SSSR); this
+//! module owns the ring-derived render hints (GR double-bond sides), the IUPAC
+//! GR-3 orientation pass, and stereo.
 
 mod orient;
-mod rings;
+pub(crate) mod rings;
 mod stereo;
 
 use crate::graph::Graph;
@@ -16,12 +16,13 @@ pub type Pt = (f64, f64);
 /// normalise the scale to unit bond length, then apply alchemist's IUPAC
 /// canonical orientation and stereo decoration. The coordinate engine owns the
 /// hard geometry; alchemist owns ring perception, orientation and rendering.
-pub fn from_coords(g: &mut Graph, raw: &[Pt], iupac: bool, rotation: f64) {
+pub fn from_coords(g: &mut Graph, raw: &[Pt], rings: Vec<Vec<usize>>, iupac: bool, rotation: f64) {
     let n = g.n();
     if n == 0 || raw.len() != n {
         return;
     }
-    g.rings = rings::find_rings(g);
+    // rings are perceived by coordgen and passed in, so we don't re-run SSSR.
+    g.rings = rings;
     rings::tag_ring_membership(g);
 
     // normalise to unit mean bond length (coordgen draws at ~50 units/bond)
@@ -71,7 +72,11 @@ pub fn from_coords(g: &mut Graph, raw: &[Pt], iupac: bool, rotation: f64) {
 
 /// Per-bond unit vector toward the ring centroid (double-bond side, GR-1.10).
 pub fn ring_inner_dirs(g: &Graph) -> Vec<(f64, f64)> {
-    let coords: Vec<Pt> = g.nodes.iter().map(|n| n.pos.unwrap_or((0.0, 0.0))).collect();
+    let coords: Vec<Pt> = g
+        .nodes
+        .iter()
+        .map(|n| n.pos.unwrap_or((0.0, 0.0)))
+        .collect();
     rings::ring_inner_dirs(g, &coords)
 }
 
@@ -105,8 +110,14 @@ fn pack_components(g: &Graph, coords: &mut [Pt]) {
     let mut cursor = 0.0;
     for c in 0..ncomp {
         let idxs: Vec<usize> = (0..n).filter(|&i| comp[i] == c).collect();
-        let minx = idxs.iter().map(|&i| coords[i].0).fold(f64::INFINITY, f64::min);
-        let maxx = idxs.iter().map(|&i| coords[i].0).fold(f64::NEG_INFINITY, f64::max);
+        let minx = idxs
+            .iter()
+            .map(|&i| coords[i].0)
+            .fold(f64::INFINITY, f64::min);
+        let maxx = idxs
+            .iter()
+            .map(|&i| coords[i].0)
+            .fold(f64::NEG_INFINITY, f64::max);
         let cy = idxs.iter().map(|&i| coords[i].1).sum::<f64>() / idxs.len() as f64;
         let dx = cursor - minx;
         for &i in &idxs {
@@ -121,20 +132,44 @@ pub fn dist(a: Pt, b: Pt) -> f64 {
     ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
 }
 
-fn center(coords: &mut [Pt]) {
+/// Unit vector from `o` toward `p` (returns the raw delta if `p == o`).
+pub(crate) fn unit(p: Pt, o: Pt) -> Pt {
+    let (dx, dy) = (p.0 - o.0, p.1 - o.1);
+    let l = (dx * dx + dy * dy).sqrt();
+    if l > 1e-12 {
+        (dx / l, dy / l)
+    } else {
+        (dx, dy)
+    }
+}
+
+/// Angle (radians) of the vector from `o` toward `p`.
+pub(crate) fn angle(p: Pt, o: Pt) -> f64 {
+    (p.1 - o.1).atan2(p.0 - o.0)
+}
+
+/// Mean position of the given atom indices.
+pub(crate) fn centroid(coords: &[Pt], atoms: &[usize]) -> Pt {
+    let n = atoms.len().max(1) as f64;
+    (
+        atoms.iter().map(|&i| coords[i].0).sum::<f64>() / n,
+        atoms.iter().map(|&i| coords[i].1).sum::<f64>() / n,
+    )
+}
+
+pub(crate) fn center(coords: &mut [Pt]) {
     if coords.is_empty() {
         return;
     }
-    let n = coords.len() as f64;
-    let cx = coords.iter().map(|p| p.0).sum::<f64>() / n;
-    let cy = coords.iter().map(|p| p.1).sum::<f64>() / n;
+    let (cx, cy) = centroid(coords, &(0..coords.len()).collect::<Vec<_>>());
     for p in coords.iter_mut() {
         p.0 -= cx;
         p.1 -= cy;
     }
 }
 
-fn rotate(coords: &mut [Pt], angle: f64) {
+/// Rotate all coordinates about the origin by `angle` (radians, CCW).
+pub(crate) fn rotate(coords: &mut [Pt], angle: f64) {
     let (s, c) = angle.sin_cos();
     for p in coords.iter_mut() {
         *p = (p.0 * c - p.1 * s, p.0 * s + p.1 * c);

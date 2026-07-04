@@ -95,8 +95,17 @@ impl P {
         self.i >= self.c.len()
     }
 
+    /// Advance past every leading character satisfying `pred`.
+    fn skip_while(&mut self, pred: impl Fn(char) -> bool) {
+        while matches!(self.peek(), Some(c) if pred(c)) {
+            self.i += 1;
+        }
+    }
+
     fn parse_bond(&mut self) -> Option<BondKind> {
-        let two: String = self.c[self.i..(self.i + 2).min(self.c.len())].iter().collect();
+        let two: String = self.c[self.i..(self.i + 2).min(self.c.len())]
+            .iter()
+            .collect();
         let sym = match two.as_str() {
             ":>" | "<:" | "|>" | "<|" => {
                 self.i += 2;
@@ -119,16 +128,9 @@ impl P {
     }
 
     fn parse_ident(&mut self) -> String {
-        let mut s = String::new();
-        while let Some(c) = self.peek() {
-            if c.is_ascii_alphanumeric() || c == '_' {
-                s.push(c);
-                self.i += 1;
-            } else {
-                break;
-            }
-        }
-        s
+        let start = self.i;
+        self.skip_while(|c| c.is_ascii_alphanumeric() || c == '_');
+        self.c[start..self.i].iter().collect()
     }
 
     /// A `(` that starts a branch (next char is a bond symbol), vs. a
@@ -147,12 +149,8 @@ impl P {
             match self.peek() {
                 Some(c) if c.is_ascii_uppercase() => {
                     self.i += 1;
-                    while matches!(self.peek(), Some(c) if c.is_ascii_lowercase()) {
-                        self.i += 1;
-                    }
-                    while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                        self.i += 1;
-                    }
+                    self.skip_while(|c| c.is_ascii_lowercase());
+                    self.skip_while(|c| c.is_ascii_digit());
                 }
                 Some('(') if !self.paren_is_branch() => {
                     // parenthetical group: ( atoms ) digits*
@@ -166,23 +164,17 @@ impl P {
                             _ => {}
                         }
                     }
-                    while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                        self.i += 1;
-                    }
+                    self.skip_while(|c| c.is_ascii_digit());
                 }
                 Some('[') => {
                     self.i += 1;
-                    while !matches!(self.peek(), Some(']') | None) {
-                        self.i += 1;
-                    }
+                    self.skip_while(|c| c != ']');
                     self.eat(']');
                 }
                 Some('^') => {
                     // isotope (^14) handled in extract; charge (^+/^2-) too
                     self.i += 1;
-                    while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                        self.i += 1;
-                    }
+                    self.skip_while(|c| c.is_ascii_digit());
                     if matches!(self.peek(), Some('+' | '-')) {
                         self.i += 1;
                     }
@@ -197,22 +189,44 @@ impl P {
         Some(extract_frag(&text))
     }
 
-    fn parse_unit(&mut self) -> Unit {
-        // node: label-ref | fragment | implicit
-        let node = if self.peek() == Some(':') && self.peek2() != Some('>') {
+    /// A `:name` annotation (but not the `:>` dative bond); consumed if present.
+    fn try_label(&mut self) -> Option<String> {
+        if self.peek() == Some(':') && self.peek2() != Some('>') {
             self.i += 1;
-            NodeAst::LabelRef(self.parse_ident())
-        } else if let Some(mut frag) = self.parse_fragment() {
-            // optional :label
-            if self.peek() == Some(':') && self.peek2() != Some('>') {
-                self.i += 1;
-                frag.label = Some(self.parse_ident());
+            Some(self.parse_ident())
+        } else {
+            None
+        }
+    }
+
+    /// One vertex: a leading `:name` remote-reference, else an atom (a condensed
+    /// `fragment` in a chain, a single `ring` atom in a ring body) with an
+    /// optional `:label`, else an implicit skeletal carbon; plus its decorations.
+    /// In ring bodies a plain `C` is a skeletal vertex, not a labelled fragment.
+    fn parse_unit(&mut self, ring: bool) -> Unit {
+        let node = if let Some(name) = self.try_label() {
+            NodeAst::LabelRef(name)
+        } else if let Some(mut frag) = if ring {
+            self.parse_ring_atom()
+        } else {
+            self.parse_fragment()
+        } {
+            frag.label = self.try_label();
+            let plain_c = ring
+                && frag.element == "C"
+                && frag.text == "C"
+                && frag.charge == 0
+                && frag.isotope.is_none()
+                && frag.hcount == 0
+                && frag.label.is_none();
+            if plain_c {
+                NodeAst::Implicit
+            } else {
+                NodeAst::Fragment(frag)
             }
-            NodeAst::Fragment(frag)
         } else {
             NodeAst::Implicit
         };
-
         let (branches, rings) = self.parse_decorations();
         Unit {
             node,
@@ -244,11 +258,7 @@ impl P {
                 } else {
                     (None, false)
                 };
-                // optional :label on ring (ignored for now)
-                if self.peek() == Some(':') && self.peek2() != Some('>') {
-                    self.i += 1;
-                    self.parse_ident();
-                }
+                self.try_label(); // optional :label on ring (ignored for now)
                 rings.push(Ring {
                     faces,
                     body,
@@ -259,40 +269,6 @@ impl P {
             }
         }
         (branches, rings)
-    }
-
-    /// One ring vertex: a single atom (not a condensed run), where a plain carbon
-    /// is a skeletal vertex and a heteroatom (or H-bearing / charged atom) gets a
-    /// label — plus its branches and fused rings.
-    fn parse_ring_unit(&mut self) -> Unit {
-        let node = if self.peek() == Some(':') && self.peek2() != Some('>') {
-            self.i += 1;
-            NodeAst::LabelRef(self.parse_ident())
-        } else if let Some(mut frag) = self.parse_ring_atom() {
-            if self.peek() == Some(':') && self.peek2() != Some('>') {
-                self.i += 1;
-                frag.label = Some(self.parse_ident());
-            }
-            let plain_c = frag.element == "C"
-                && frag.text == "C"
-                && frag.charge == 0
-                && frag.isotope.is_none()
-                && frag.hcount == 0
-                && frag.label.is_none();
-            if plain_c {
-                NodeAst::Implicit
-            } else {
-                NodeAst::Fragment(frag)
-            }
-        } else {
-            NodeAst::Implicit
-        };
-        let (branches, rings) = self.parse_decorations();
-        Unit {
-            node,
-            branches,
-            rings,
-        }
     }
 
     /// Parse a single ring-vertex atom: one element symbol + optional explicit H
@@ -312,16 +288,12 @@ impl P {
         // explicit attached hydrogens, e.g. NH / NH1 (pyrrole-type)
         if self.peek() == Some('H') {
             self.i += 1;
-            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                self.i += 1;
-            }
+            self.skip_while(|c| c.is_ascii_digit());
         }
         // ^isotope / ^charge marker
         if self.peek() == Some('^') {
             self.i += 1;
-            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-                self.i += 1;
-            }
+            self.skip_while(|c| c.is_ascii_digit());
             if matches!(self.peek(), Some('+' | '-')) {
                 self.i += 1;
             }
@@ -332,25 +304,27 @@ impl P {
 
     fn parse_int(&mut self) -> Option<u32> {
         let start = self.i;
-        while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
-            self.i += 1;
-        }
+        self.skip_while(|c| c.is_ascii_digit());
         if self.i == start {
             None
         } else {
-            self.c[start..self.i].iter().collect::<String>().parse().ok()
+            self.c[start..self.i]
+                .iter()
+                .collect::<String>()
+                .parse()
+                .ok()
         }
     }
 
     fn parse_molecule(&mut self) -> Mol {
-        let first = self.parse_unit();
+        let first = self.parse_unit(false);
         let mut rest = Vec::new();
         while let Some(save) = {
             let s = self.i;
             self.parse_bond().map(|b| (s, b))
         } {
             let (_, bond) = save;
-            let unit = self.parse_unit();
+            let unit = self.parse_unit(false);
             rest.push((bond, unit));
         }
         Mol { first, rest }
@@ -362,7 +336,7 @@ impl P {
     /// Returns whether any explicit bond symbol appeared.
     fn parse_ring_body(&mut self) -> (Mol, bool) {
         let mut explicit = false;
-        let first = self.parse_ring_unit();
+        let first = self.parse_unit(true);
         let mut rest = Vec::new();
         loop {
             if self.peek() == Some(')') || self.at_end() {
@@ -376,7 +350,7 @@ impl P {
                 }
                 None => BondKind::Single,
             };
-            let unit = self.parse_ring_unit();
+            let unit = self.parse_unit(true);
             if self.i == before {
                 break; // no progress (unexpected char) — avoid looping forever
             }
@@ -487,12 +461,8 @@ fn node_from_frag(f: &Frag) -> Node {
         isotope: f.isotope,
         hcount: f.hcount,
         label: f.label.clone(),
-        aromatic: false,
-        chirality: 0,
-        preceding: false,
         h_explicit: true,
-        pos: None,
-        ring_ids: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -515,7 +485,12 @@ impl Builder {
         Some(first)
     }
 
-    fn build_unit(&mut self, unit: &Unit, parent: Option<usize>, incoming: BondKind) -> Option<usize> {
+    fn build_unit(
+        &mut self,
+        unit: &Unit,
+        parent: Option<usize>,
+        incoming: BondKind,
+    ) -> Option<usize> {
         let cur = match &unit.node {
             NodeAst::LabelRef(name) => {
                 // remote closure: bond parent to the referenced node
@@ -551,68 +526,80 @@ impl Builder {
     }
 
     /// Build an `n`-membered ring whose vertex 0 is `anchor`.
-    fn build_ring(&mut self, anchor: usize, ring: &Ring) {
-        let n = ring.faces;
-        if n < 3 {
-            return;
-        }
-        // Per-edge bond kinds and per-vertex decorations from the body.
-        let mut kinds: Vec<BondKind> = Vec::new();
-        // decoration for vertices v1..v_{n-1}: (branches, rings) reuse Unit
-        let mut vert_units: Vec<Option<Unit>> = Vec::new();
-        let mut first_unit: Option<Unit> = None;
-        if let Some(body) = &ring.body {
-            first_unit = Some(body.first.clone()); // decorates v0 (anchor)
+    /// Per-edge bond kinds and per-vertex body decorations, padded/truncated to
+    /// exactly `edges` entries (defaulting to single bonds / no decoration).
+    fn ring_edges(body: &Option<Mol>, edges: usize) -> (Vec<BondKind>, Vec<Option<Unit>>) {
+        let mut kinds = Vec::new();
+        let mut units = Vec::new();
+        if let Some(body) = body {
             for (bond, unit) in &body.rest {
                 kinds.push(*bond);
-                vert_units.push(Some(unit.clone()));
+                units.push(Some(unit.clone()));
             }
         }
-        // pad/truncate to exactly n edges with single bonds
-        while kinds.len() < n {
-            kinds.push(BondKind::Single);
-            vert_units.push(None);
-        }
-        kinds.truncate(n);
-        vert_units.truncate(n);
+        kinds.resize(edges, BondKind::Single);
+        units.resize(edges, None);
+        (kinds, units)
+    }
 
-        let mut prev = anchor;
-        let mut verts = vec![anchor];
-        for k in 0..n {
-            let target = if k == n - 1 {
-                anchor // closing edge
+    /// Walk a ring path from `start`, adding one bond per `kinds` entry; the last
+    /// bond closes onto the existing vertex `close`. Interior vertices are created
+    /// (as body fragments or skeletal carbons). Returns start + interior vertices.
+    fn lay_ring_path(
+        &mut self,
+        start: usize,
+        close: usize,
+        kinds: &[BondKind],
+        units: &[Option<Unit>],
+    ) -> Vec<usize> {
+        let mut prev = start;
+        let mut verts = vec![start];
+        for (k, &kind) in kinds.iter().enumerate() {
+            let target = if k == kinds.len() - 1 {
+                close
             } else {
-                // create vertex k+1, possibly a fragment from the body unit
-                let id = match vert_units.get(k).and_then(|u| u.as_ref()) {
+                let id = match units[k].as_ref() {
                     Some(u) => self.unit_vertex(u),
                     None => self.g.add_node(Node::skeletal()),
                 };
                 verts.push(id);
                 id
             };
-            self.g.add_bond(prev, target, kinds[k]);
+            self.g.add_bond(prev, target, kind);
             prev = target;
         }
-        // decorate each vertex; nested rings fuse on the ring edge entering it.
-        if let Some(u) = &first_unit {
-            // The body's first token sets vertex 0's atom, so a heteroatom written
-            // there (e.g. `@6(N)` pyridine) replaces the skeletal anchor carbon.
+        verts
+    }
+
+    /// Decorate interior vertices `verts[1..]` from their body units (`units[k]`
+    /// decorates `verts[k+1]`, entered from `verts[k]`).
+    fn decorate_ring(&mut self, verts: &[usize], units: &[Option<Unit>]) {
+        for k in 0..verts.len() - 1 {
+            if let Some(Some(u)) = units.get(k) {
+                self.decorate_vertex(verts[k], verts[k + 1], u);
+            }
+        }
+    }
+
+    fn build_ring(&mut self, anchor: usize, ring: &Ring) {
+        let n = ring.faces;
+        if n < 3 {
+            return;
+        }
+        let (kinds, units) = Self::ring_edges(&ring.body, n);
+        let verts = self.lay_ring_path(anchor, anchor, &kinds, &units);
+        // The body's first token decorates vertex 0 (the anchor); a heteroatom
+        // written there (e.g. `@6(N)` pyridine) replaces the skeletal anchor carbon.
+        if let Some(u) = ring.body.as_ref().map(|b| &b.first) {
             if let NodeAst::Fragment(f) = &u.node {
                 let ring_ids = self.g.nodes[anchor].ring_ids.clone();
                 let mut nn = node_from_frag(f);
                 nn.ring_ids = ring_ids;
                 self.g.nodes[anchor] = nn;
             }
-            let pred = *verts.last().unwrap();
-            self.decorate_vertex(pred, anchor, u);
+            self.decorate_vertex(*verts.last().unwrap(), anchor, u);
         }
-        for k in 0..(n - 1) {
-            if let Some(Some(u)) = vert_units.get(k) {
-                let vid = verts[k + 1];
-                let pred = verts[k];
-                self.decorate_vertex(pred, vid, u);
-            }
-        }
+        self.decorate_ring(&verts, &units);
         self.maybe_aromatize(n, ring.explicit_bonds, &verts);
     }
 
@@ -636,50 +623,17 @@ impl Builder {
 
     /// Build an `n`-ring fused onto the existing edge (a, b): a and b are two of
     /// its vertices, sharing that bond; only the other n-2 vertices are new.
+    /// Build an `n`-ring fused onto the existing edge (a, b): a and b are two of
+    /// its vertices sharing that bond, so only the other n-2 vertices are new and
+    /// the body provides the n-1 non-shared edges (b -> ... -> a).
     fn build_fused_ring(&mut self, a: usize, b: usize, ring: &Ring) {
         let n = ring.faces;
         if n < 3 {
             return;
         }
-        // body provides the n-1 non-shared edges (b -> ... -> a)
-        let mut kinds: Vec<BondKind> = Vec::new();
-        let mut vunits: Vec<Option<Unit>> = Vec::new();
-        if let Some(body) = &ring.body {
-            for (bond, unit) in &body.rest {
-                kinds.push(*bond);
-                vunits.push(Some(unit.clone()));
-            }
-        }
-        while kinds.len() < n - 1 {
-            kinds.push(BondKind::Single);
-            vunits.push(None);
-        }
-        kinds.truncate(n - 1);
-        vunits.truncate(n - 1);
-
-        let mut prev = b;
-        let mut verts = vec![b];
-        for k in 0..(n - 1) {
-            let target = if k == n - 2 {
-                a // close onto the shared edge's other end
-            } else {
-                let id = match vunits.get(k).and_then(|u| u.as_ref()) {
-                    Some(u) => self.unit_vertex(u),
-                    None => self.g.add_node(Node::skeletal()),
-                };
-                verts.push(id);
-                id
-            };
-            self.g.add_bond(prev, target, kinds[k]);
-            prev = target;
-        }
-        for k in 0..(n - 2) {
-            if let Some(Some(u)) = vunits.get(k) {
-                let vid = verts[k + 1];
-                let pred = verts[k];
-                self.decorate_vertex(pred, vid, u);
-            }
-        }
+        let (kinds, units) = Self::ring_edges(&ring.body, n - 1);
+        let verts = self.lay_ring_path(b, a, &kinds, &units);
+        self.decorate_ring(&verts, &units);
         let mut atoms = verts.clone();
         atoms.push(a);
         self.maybe_aromatize(n, ring.explicit_bonds, &atoms);
@@ -771,7 +725,10 @@ mod tests {
         assert_eq!(m.nodes.len(), 6, "benzene has 6 vertices");
         assert_eq!(m.bonds.len(), 6, "benzene has 6 edges");
         assert_eq!(
-            m.bonds.iter().filter(|b| b.kind == BondKind::Double).count(),
+            m.bonds
+                .iter()
+                .filter(|b| b.kind == BondKind::Double)
+                .count(),
             3
         );
     }
@@ -793,14 +750,20 @@ mod tests {
     }
 
     fn doubles(m: &Graph) -> usize {
-        m.bonds.iter().filter(|b| b.kind == BondKind::Double).count()
+        m.bonds
+            .iter()
+            .filter(|b| b.kind == BondKind::Double)
+            .count()
     }
 
     #[test]
     fn at6_is_benzene() {
         let m = g("@6");
         assert_eq!(m.nodes.len(), 6);
-        assert!(m.nodes.iter().all(|n| n.aromatic), "all ring atoms aromatic");
+        assert!(
+            m.nodes.iter().all(|n| n.aromatic),
+            "all ring atoms aromatic"
+        );
         assert_eq!(doubles(&m), 3, "benzene kekulizes to 3 double bonds");
     }
 
@@ -825,7 +788,10 @@ mod tests {
     fn explicit_single_is_cyclohexane() {
         let m = g("@6(------)");
         assert_eq!(m.nodes.len(), 6);
-        assert!(m.nodes.iter().all(|n| !n.aromatic), "explicit bonds: not aromatic");
+        assert!(
+            m.nodes.iter().all(|n| !n.aromatic),
+            "explicit bonds: not aromatic"
+        );
         assert_eq!(doubles(&m), 0, "cyclohexane is saturated");
     }
 

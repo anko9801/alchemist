@@ -62,7 +62,7 @@ impl BondKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Node {
     /// Condensed label to render; None = skeletal carbon vertex.
     pub text: Option<String>,
@@ -90,18 +90,8 @@ pub struct Node {
 impl Node {
     pub fn skeletal() -> Self {
         Node {
-            text: None,
             element: "C".into(),
-            charge: 0,
-            isotope: None,
-            hcount: 0,
-            label: None,
-            aromatic: false,
-            chirality: 0,
-            preceding: false,
-            h_explicit: false,
-            pos: None,
-            ring_ids: Vec::new(),
+            ..Default::default()
         }
     }
     pub fn is_skeletal(&self) -> bool {
@@ -164,6 +154,31 @@ impl Graph {
             .find_map(|&(nb, bi)| if nb == b { Some(bi) } else { None })
     }
 
+    /// Laid-out position of atom `i` (origin if it has not been placed yet).
+    pub fn pos(&self, i: usize) -> (f64, f64) {
+        self.nodes[i].pos.unwrap_or((0.0, 0.0))
+    }
+
+    /// Sum of bond orders incident on atom `i` (single = 1, double = 2, …).
+    pub fn bond_order_sum(&self, i: usize) -> i16 {
+        self.adj[i]
+            .iter()
+            .map(|&(_, bi)| self.bonds[bi].kind.order() as i16)
+            .sum()
+    }
+
+    /// Hydrogens needed to fill atom `i`'s (charge-adjusted) standard valence,
+    /// given the heavy bonds already placed; 0 for elements with no set valence.
+    pub fn implicit_h(&self, i: usize) -> u8 {
+        let node = &self.nodes[i];
+        standard_valence(&node.element)
+            .map(|v| {
+                (v + charge_valence_adjust(&node.element, node.charge) - self.bond_order_sum(i))
+                    .max(0) as u8
+            })
+            .unwrap_or(0)
+    }
+
     /// Assign Kekulé double bonds to atoms flagged `aromatic` (used by the DSL
     /// auto-aromatic rings). Greedy maximum matching over the currently-single
     /// bonds between aromatic atoms — the same scheme the SMILES front-end uses.
@@ -175,7 +190,9 @@ impl Graph {
                 continue;
             }
             // an atom already carrying a double/triple (e.g. exocyclic C=O) is set
-            let has_multiple = self.adj[i].iter().any(|&(_, bi)| self.bonds[bi].kind.order() >= 2);
+            let has_multiple = self.adj[i]
+                .iter()
+                .any(|&(_, bi)| self.bonds[bi].kind.order() >= 2);
             if has_multiple {
                 continue;
             }
@@ -196,14 +213,29 @@ impl Graph {
                 self.nodes[b.a].aromatic && self.nodes[b.b].aromatic && b.kind == BondKind::Single
             })
             .collect();
-        let mut matched = vec![false; n];
-        let mut atoms: Vec<usize> = (0..n).filter(|&i| needs[i]).collect();
-        atoms.sort_by_key(|&i| {
+        // greedy maximum matching, most-constrained atom first: order by how many
+        // aromatic edges reach *another* atom that also needs a double, so a atom
+        // with only one possible partner (e.g. a pyrrole β-carbon) is matched
+        // before its partner gets taken by someone else.
+        let free_deg = |i: usize| {
             arom_edges
                 .iter()
-                .filter(|&&e| self.bonds[e].a == i || self.bonds[e].b == i)
+                .filter(|&&e| {
+                    let (a, c) = (self.bonds[e].a, self.bonds[e].b);
+                    let j = if a == i {
+                        c
+                    } else if c == i {
+                        a
+                    } else {
+                        return false;
+                    };
+                    needs[j]
+                })
                 .count()
-        });
+        };
+        let mut matched = vec![false; n];
+        let mut atoms: Vec<usize> = (0..n).filter(|&i| needs[i]).collect();
+        atoms.sort_by_key(|&i| free_deg(i));
         for &i in &atoms {
             if matched[i] {
                 continue;
@@ -231,15 +263,46 @@ impl Graph {
 /// Atomic number for a heavy-atom element symbol (defaults to carbon).
 pub fn atomic_number(sym: &str) -> i32 {
     match sym {
-        "H" => 1, "He" => 2, "Li" => 3, "Be" => 4, "B" => 5, "C" => 6, "N" => 7,
-        "O" => 8, "F" => 9, "Ne" => 10, "Na" => 11, "Mg" => 12, "Al" => 13,
-        "Si" => 14, "P" => 15, "S" => 16, "Cl" => 17, "Ar" => 18, "K" => 19,
-        "Ca" => 20, "Fe" => 26, "Cu" => 29, "Zn" => 30, "Br" => 35, "I" => 53,
+        "H" => 1,
+        "He" => 2,
+        "Li" => 3,
+        "Be" => 4,
+        "B" => 5,
+        "C" => 6,
+        "N" => 7,
+        "O" => 8,
+        "F" => 9,
+        "Ne" => 10,
+        "Na" => 11,
+        "Mg" => 12,
+        "Al" => 13,
+        "Si" => 14,
+        "P" => 15,
+        "S" => 16,
+        "Cl" => 17,
+        "Ar" => 18,
+        "K" => 19,
+        "Ca" => 20,
+        "Fe" => 26,
+        "Cu" => 29,
+        "Zn" => 30,
+        "Br" => 35,
+        "I" => 53,
         _ => 6,
     }
 }
 
 /// Standard neutral valence for implicit-H (SMILES front-end).
+/// Valence adjustment for charged heteroatoms (N⁺ takes 4 bonds, O⁻ takes 1, a
+/// charged carbon loses one per unit charge, …).
+pub fn charge_valence_adjust(elem: &str, charge: i8) -> i16 {
+    match elem {
+        "N" | "P" | "O" | "S" => charge as i16,
+        "C" => -(charge.abs() as i16),
+        _ => 0,
+    }
+}
+
 pub fn standard_valence(sym: &str) -> Option<i16> {
     Some(match sym {
         "C" | "Si" | "Sn" => 4,

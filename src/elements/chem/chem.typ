@@ -10,6 +10,7 @@
 #import "@preview/cetz:0.5.2"
 #import "skeleton.typ": draw-skeleton-core
 #import "decorations.typ": draw-decorations
+#import "geometry.typ": curly-arc
 
 // ── WASM engine ──────────────────────────────────────────────────────────────
 // Pipeline: the Rust engine parses the source and emits the integer connectivity
@@ -133,16 +134,7 @@
   cetz.draw.get-ctx(ctx => {
     let (ctx, a) = cetz.coordinate.resolve(ctx, from)
     let (ctx, b) = cetz.coordinate.resolve(ctx, to)
-    let dx = b.at(0) - a.at(0)
-    let dy = b.at(1) - a.at(1)
-    let len = calc.max(calc.sqrt(dx * dx + dy * dy), 0.0001)
-    let (ux, uy) = (dx / len, dy / len)
-    let (px, py) = (-uy * side, ux * side)
-    // tail beside the source; head offset less so it curves into the target atom
-    let p0 = (a.at(0) + ux * pad + px * off, a.at(1) + uy * pad + py * off)
-    let p3 = (b.at(0) - ux * pad * 0.2 + px * off * 0.55, b.at(1) - uy * pad * 0.2 + py * off * 0.55)
-    let c1 = (p0.at(0) + ux * len * 0.2 + px * bend, p0.at(1) + uy * len * 0.2 + py * bend)
-    let c2 = (p3.at(0) + px * bend, p3.at(1) + py * bend)
+    let (p0, p3, c1, c2) = curly-arc(a, b, side, off, bend, pad)
     cetz.draw.bezier(p0, p3, c1, c2, stroke: 0.7pt + paint, mark: (end: ">", scale: 0.85))
   })
 }

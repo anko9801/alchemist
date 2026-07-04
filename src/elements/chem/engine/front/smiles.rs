@@ -1,12 +1,19 @@
-//! Hand-written OpenSMILES parser -> Graph IR.
+//! OpenSMILES parser -> Graph IR, built on the `winnow` combinator library.
 //!
 //! Covers the organic subset + bracket atoms (isotope, charge, H-count,
 //! chirality), bonds (`- = # :` and directional `/ \`), branches, ring closures
 //! (single digit and `%nn`), the disconnection dot, and lowercase aromatic atoms
 //! with Kekulization. Each SMILES atom becomes one graph vertex; carbons render
 //! as bare skeletal vertices, heteroatoms as element + hydrogen labels.
+//!
+//! Parsing is two stages: `winnow` tokenizes the string into `Tok`s, then
+//! `build` walks the tokens into a graph (branch stack, ring-closure matching).
 
-use crate::graph::{standard_valence, BondKind, Graph, Node};
+use crate::graph::{BondKind, Graph, Node};
+use winnow::ascii::digit1;
+use winnow::combinator::{alt, delimited, opt, preceded, repeat};
+use winnow::token::one_of;
+use winnow::{ModalResult, Parser};
 
 #[derive(Clone, Copy, PartialEq)]
 enum BondTok {
@@ -29,9 +36,173 @@ impl BondTok {
     }
 }
 
+// ── tokenizer (winnow) ───────────────────────────────────────────────────────
+
+/// A parsed atom: element symbol + attributes (organic atoms default them).
+struct AtomSpec {
+    element: String,
+    aromatic: bool,
+    charge: i8,
+    isotope: Option<u16>,
+    hcount: Option<u8>,
+    chirality: i8,
+}
+
+impl AtomSpec {
+    fn plain(element: String, aromatic: bool) -> Self {
+        AtomSpec {
+            element,
+            aromatic,
+            charge: 0,
+            isotope: None,
+            hcount: None,
+            chirality: 0,
+        }
+    }
+}
+
+enum Tok {
+    Atom(AtomSpec),
+    Bond(BondTok),
+    Open,
+    Close,
+    Dot,
+    Ring(u32),
+}
+
+fn uint(input: &mut &str) -> ModalResult<u32> {
+    digit1.parse_to().parse_next(input)
+}
+
+fn digit(input: &mut &str) -> ModalResult<u32> {
+    one_of(|c: char| c.is_ascii_digit())
+        .map(|c: char| c.to_digit(10).unwrap())
+        .parse_next(input)
+}
+
+/// Organic-subset atom: two-letter (Cl/Br), an upper-case organic element, a
+/// lower-case aromatic element, or the `*` wildcard.
+fn organic(input: &mut &str) -> ModalResult<AtomSpec> {
+    alt((
+        alt(("Cl", "Br")).map(|s: &str| AtomSpec::plain(s.to_string(), false)),
+        one_of(['B', 'C', 'N', 'O', 'P', 'S', 'F', 'I'])
+            .map(|c: char| AtomSpec::plain(c.to_string(), false)),
+        one_of(['b', 'c', 'n', 'o', 'p', 's'])
+            .map(|c: char| AtomSpec::plain(c.to_ascii_uppercase().to_string(), true)),
+        '*'.map(|_| AtomSpec::plain("*".to_string(), false)),
+    ))
+    .parse_next(input)
+}
+
+/// The element part of a bracket atom -> (symbol, aromatic).
+fn bracket_symbol(input: &mut &str) -> ModalResult<(String, bool)> {
+    alt((
+        '*'.map(|_| ("*".to_string(), false)),
+        (
+            one_of(|c: char| c.is_ascii_uppercase()),
+            opt(one_of(|c: char| c.is_ascii_lowercase())),
+        )
+            .map(|(u, l): (char, Option<char>)| {
+                let mut s = u.to_string();
+                if let Some(l) = l {
+                    s.push(l);
+                }
+                (s, false)
+            }),
+        one_of(|c: char| c.is_ascii_lowercase())
+            .map(|c: char| (c.to_ascii_uppercase().to_string(), true)),
+    ))
+    .parse_next(input)
+}
+
+/// `@` (anticlockwise, -1) / `@@` (clockwise, +1); a stereo-class tail (e.g.
+/// `@TH1`) is skipped, stopping before the H-count.
+fn chirality(input: &mut &str) -> ModalResult<i8> {
+    let Some(second_at) = opt(preceded('@', opt('@'))).parse_next(input)? else {
+        return Ok(0);
+    };
+    let _: String =
+        repeat(0.., one_of(|c: char| c.is_ascii_alphanumeric() && c != 'H')).parse_next(input)?;
+    Ok(if second_at.is_some() { 1 } else { -1 })
+}
+
+/// Formal charge: `+`/`-`, `+n`/`-n`, or a run of `++`/`--`.
+fn charge(input: &mut &str) -> ModalResult<i8> {
+    for (sign, mag) in [('+', 1i8), ('-', -1)] {
+        if opt(sign).parse_next(input)?.is_some() {
+            if let Some(n) = opt(uint).parse_next(input)? {
+                return Ok(mag * n as i8);
+            }
+            let extra: usize = repeat(0.., sign).parse_next(input)?;
+            return Ok(mag * (1 + extra as i8));
+        }
+    }
+    Ok(0)
+}
+
+fn bracket(input: &mut &str) -> ModalResult<AtomSpec> {
+    delimited(
+        '[',
+        (
+            opt(uint),
+            bracket_symbol,
+            chirality,
+            opt(preceded('H', opt(uint))),
+            charge,
+        ),
+        ']',
+    )
+    .map(
+        |(isotope, (element, aromatic), chirality, h, charge)| AtomSpec {
+            element,
+            aromatic,
+            charge,
+            isotope: isotope.map(|n| n as u16),
+            hcount: Some(h.map(|o| o.unwrap_or(1) as u8).unwrap_or(0)),
+            chirality,
+        },
+    )
+    .parse_next(input)
+}
+
+fn bond(input: &mut &str) -> ModalResult<BondTok> {
+    one_of(['-', '=', '#', ':', '/', '\\'])
+        .map(|c: char| match c {
+            '=' => BondTok::Double,
+            '#' => BondTok::Triple,
+            ':' => BondTok::Aromatic,
+            '/' => BondTok::Up,
+            '\\' => BondTok::Down,
+            _ => BondTok::Single,
+        })
+        .parse_next(input)
+}
+
+fn ring(input: &mut &str) -> ModalResult<u32> {
+    alt((
+        preceded('%', (digit, digit)).map(|(a, b)| a * 10 + b),
+        digit,
+    ))
+    .parse_next(input)
+}
+
+fn token(input: &mut &str) -> ModalResult<Tok> {
+    alt((
+        bracket.map(Tok::Atom),
+        organic.map(Tok::Atom),
+        bond.map(Tok::Bond),
+        '('.map(|_| Tok::Open),
+        ')'.map(|_| Tok::Close),
+        '.'.map(|_| Tok::Dot),
+        ring.map(Tok::Ring),
+    ))
+    .parse_next(input)
+}
+
+// ── graph builder ────────────────────────────────────────────────────────────
+
 struct Builder {
     g: Graph,
-    aromatic_atom: Vec<bool>,
     explicit_h: Vec<Option<u8>>,
     // temp bonds: (a, b, tok)
     bonds: Vec<(usize, usize, BondTok)>,
@@ -41,267 +212,64 @@ impl Builder {
     fn new() -> Self {
         Builder {
             g: Graph::default(),
-            aromatic_atom: Vec::new(),
             explicit_h: Vec::new(),
             bonds: Vec::new(),
         }
     }
 
-    fn add_atom(
-        &mut self,
-        element: String,
-        aromatic: bool,
-        charge: i8,
-        isotope: Option<u16>,
-        explicit_h: Option<u8>,
-        chirality: i8,
-    ) -> usize {
+    fn add_atom(&mut self, spec: AtomSpec) -> usize {
         let id = self.g.add_node(Node {
-            text: None,
-            element,
-            charge,
-            isotope,
-            hcount: 0,
-            label: None,
-            aromatic,
-            chirality,
-            preceding: false,
+            element: spec.element,
+            charge: spec.charge,
+            isotope: spec.isotope,
+            aromatic: spec.aromatic,
+            chirality: spec.chirality,
             h_explicit: true,
-            pos: None,
-            ring_ids: Vec::new(),
+            ..Default::default()
         });
-        self.aromatic_atom.push(aromatic);
-        self.explicit_h.push(explicit_h);
+        self.explicit_h.push(spec.hcount);
         id
     }
 }
 
-struct P {
-    c: Vec<char>,
-    i: usize,
-}
-
-impl P {
-    fn peek(&self) -> Option<char> {
-        self.c.get(self.i).copied()
-    }
-    fn bump(&mut self) -> Option<char> {
-        let c = self.peek();
-        if c.is_some() {
-            self.i += 1;
-        }
-        c
-    }
-}
-
-const ORGANIC2: &[&str] = &["Cl", "Br"];
-const ORGANIC1: &[char] = &['B', 'C', 'N', 'O', 'P', 'S', 'F', 'I'];
-const AROMATIC1: &[char] = &['b', 'c', 'n', 'o', 'p', 's'];
-
-fn parse_uint(p: &mut P) -> Option<u32> {
-    let start = p.i;
-    while matches!(p.peek(), Some(c) if c.is_ascii_digit()) {
-        p.i += 1;
-    }
-    if p.i == start {
-        None
-    } else {
-        p.c[start..p.i].iter().collect::<String>().parse().ok()
-    }
-}
-
-fn parse_bracket(p: &mut P, b: &mut Builder) -> Result<usize, String> {
-    // already consumed '['
-    let isotope = parse_uint(p).map(|n| n as u16);
-    // symbol
-    let (element, aromatic) = match p.peek() {
-        Some(c) if c.is_ascii_uppercase() => {
-            let mut s = c.to_string();
-            p.i += 1;
-            if matches!(p.peek(), Some(l) if l.is_ascii_lowercase()) {
-                s.push(p.bump().unwrap());
-            }
-            (s, false)
-        }
-        Some(c) if c.is_ascii_lowercase() => {
-            p.i += 1;
-            (c.to_ascii_uppercase().to_string(), true)
-        }
-        Some('*') => {
-            p.i += 1;
-            ("*".to_string(), false)
-        }
-        _ => return Err("bad bracket atom symbol".into()),
-    };
-    // chirality @ (anti) / @@ (clockwise)
-    let mut chirality = 0i8;
-    if p.peek() == Some('@') {
-        p.i += 1;
-        if p.peek() == Some('@') {
-            p.i += 1;
-            chirality = 1;
-        } else {
-            chirality = -1;
-        }
-        // skip a stereo-class tail like @TH1, but not the H-count
-        while matches!(p.peek(), Some(c) if c.is_ascii_alphanumeric()) {
-            if p.peek() == Some('H') {
-                break;
-            }
-            p.i += 1;
-        }
-    }
-    // hydrogens
-    let mut hcount = 0u8;
-    if p.peek() == Some('H') {
-        p.i += 1;
-        hcount = parse_uint(p).unwrap_or(1) as u8;
-    }
-    // charge
-    let mut charge = 0i8;
-    match p.peek() {
-        Some('+') => {
-            p.i += 1;
-            if let Some(n) = parse_uint(p) {
-                charge = n as i8;
-            } else {
-                charge = 1;
-                while p.peek() == Some('+') {
-                    charge += 1;
-                    p.i += 1;
-                }
-            }
-        }
-        Some('-') => {
-            p.i += 1;
-            if let Some(n) = parse_uint(p) {
-                charge = -(n as i8);
-            } else {
-                charge = -1;
-                while p.peek() == Some('-') {
-                    charge -= 1;
-                    p.i += 1;
-                }
-            }
-        }
-        _ => {}
-    }
-    if p.peek() != Some(']') {
-        return Err("unterminated bracket atom".into());
-    }
-    p.i += 1;
-    Ok(b.add_atom(element, aromatic, charge, isotope, Some(hcount), chirality))
-}
-
-fn parse_organic(p: &mut P, b: &mut Builder) -> Option<usize> {
-    // two-letter first
-    if p.i + 1 < p.c.len() {
-        let two: String = p.c[p.i..p.i + 2].iter().collect();
-        if ORGANIC2.contains(&two.as_str()) {
-            p.i += 2;
-            return Some(b.add_atom(two, false, 0, None, None, 0));
-        }
-    }
-    match p.peek() {
-        Some(c) if ORGANIC1.contains(&c) => {
-            p.i += 1;
-            Some(b.add_atom(c.to_string(), false, 0, None, None, 0))
-        }
-        Some(c) if AROMATIC1.contains(&c) => {
-            p.i += 1;
-            Some(b.add_atom(c.to_ascii_uppercase().to_string(), true, 0, None, None, 0))
-        }
-        Some('*') => {
-            p.i += 1;
-            Some(b.add_atom("*".to_string(), false, 0, None, None, 0))
-        }
-        _ => None,
-    }
-}
-
 pub fn parse(source: &str) -> Result<Graph, String> {
-    let mut p = P {
-        c: source.trim().chars().collect(),
-        i: 0,
-    };
+    let mut input = source.trim();
+    let toks: Vec<Tok> = repeat(0.., token)
+        .parse_next(&mut input)
+        .map_err(|_| "invalid SMILES".to_string())?;
+    if !input.is_empty() {
+        return Err(format!("unexpected character in SMILES near {input:?}"));
+    }
+    build(toks)
+}
+
+fn build(toks: Vec<Tok>) -> Result<Graph, String> {
     let mut b = Builder::new();
     let mut prev: Option<usize> = None;
     let mut pending = BondTok::Default;
     let mut stack: Vec<Option<usize>> = Vec::new();
     // ring closure digit -> (atom, bond tok)
-    let mut rings: std::collections::HashMap<u32, (usize, BondTok)> = std::collections::HashMap::new();
+    let mut rings: std::collections::HashMap<u32, (usize, BondTok)> =
+        std::collections::HashMap::new();
 
-    while let Some(ch) = p.peek() {
-        match ch {
-            '(' => {
-                p.i += 1;
-                stack.push(prev);
-            }
-            ')' => {
-                p.i += 1;
-                prev = stack.pop().ok_or("unbalanced ')' in SMILES")?;
-            }
-            '-' => {
-                p.i += 1;
-                pending = BondTok::Single;
-            }
-            '=' => {
-                p.i += 1;
-                pending = BondTok::Double;
-            }
-            '#' => {
-                p.i += 1;
-                pending = BondTok::Triple;
-            }
-            ':' => {
-                p.i += 1;
-                pending = BondTok::Aromatic;
-            }
-            '/' => {
-                p.i += 1;
-                pending = BondTok::Up;
-            }
-            '\\' => {
-                p.i += 1;
-                pending = BondTok::Down;
-            }
-            '.' => {
-                p.i += 1;
+    for tok in toks {
+        match tok {
+            Tok::Open => stack.push(prev),
+            Tok::Close => prev = stack.pop().ok_or("unbalanced ')' in SMILES")?,
+            Tok::Dot => {
                 prev = None;
                 pending = BondTok::Default;
             }
-            '%' => {
-                p.i += 1;
-                let d1 = p.bump().and_then(|c| c.to_digit(10));
-                let d2 = p.bump().and_then(|c| c.to_digit(10));
-                let (Some(d1), Some(d2)) = (d1, d2) else {
-                    return Err("bad %nn ring bond".into());
-                };
-                close_ring(&mut b, &mut rings, prev, pending, d1 * 10 + d2)?;
+            Tok::Bond(bt) => pending = bt,
+            Tok::Ring(n) => {
+                close_ring(&mut b, &mut rings, prev, pending, n)?;
                 pending = BondTok::Default;
             }
-            c if c.is_ascii_digit() => {
-                p.i += 1;
-                close_ring(&mut b, &mut rings, prev, pending, c.to_digit(10).unwrap())?;
-                pending = BondTok::Default;
-            }
-            '[' => {
-                p.i += 1;
-                let id = parse_bracket(&mut p, &mut b)?;
+            Tok::Atom(spec) => {
+                let id = b.add_atom(spec);
                 link(&mut b, &mut prev, pending, id);
                 pending = BondTok::Default;
             }
-            c if c.is_alphabetic() || c == '*' => {
-                let Some(id) = parse_organic(&mut p, &mut b) else {
-                    return Err(format!("unexpected character {:?}", c));
-                };
-                link(&mut b, &mut prev, pending, id);
-                pending = BondTok::Default;
-            }
-            c if c.is_whitespace() => {
-                p.i += 1;
-            }
-            c => return Err(format!("unexpected character {:?}", c)),
         }
     }
 
@@ -322,7 +290,7 @@ fn link(b: &mut Builder, prev: &mut Option<usize>, pending: BondTok, id: usize) 
     if let Some(p) = *prev {
         b.g.nodes[id].preceding = true;
         let tok = if pending == BondTok::Default {
-            if b.aromatic_atom[p] && b.aromatic_atom[id] {
+            if b.g.nodes[p].aromatic && b.g.nodes[id].aromatic {
                 BondTok::Aromatic
             } else {
                 BondTok::Single
@@ -348,7 +316,7 @@ fn close_ring(
             pending
         } else if open_tok != BondTok::Default {
             open_tok
-        } else if b.aromatic_atom[open] && b.aromatic_atom[cur] {
+        } else if b.g.nodes[open].aromatic && b.g.nodes[cur].aromatic {
             BondTok::Aromatic
         } else {
             BondTok::Single
@@ -362,62 +330,41 @@ fn close_ring(
 
 fn finalize(mut b: Builder) -> Result<Graph, String> {
     let n = b.g.n();
-    // Kekulize aromatic bonds: assign alternating doubles.
-    let mut order = vec![BondTok::Single; b.bonds.len()];
-    for (i, &(_, _, tok)) in b.bonds.iter().enumerate() {
-        order[i] = tok;
-    }
-    kekulize(&b, &mut order);
-
-    // Create real graph bonds, preserving / \ direction for cis/trans.
-    let dirs: Vec<i8> = b
-        .bonds
-        .iter()
-        .map(|&(_, _, t)| match t {
+    // Create real graph bonds (aromatic edges as single for now), keeping the
+    // / \ direction markers for cis/trans.
+    for &(a, c, tok) in &b.bonds {
+        let dir = match tok {
             BondTok::Up => 1,
             BondTok::Down => -1,
             _ => 0,
-        })
-        .collect();
-    for (i, &(a, c, _)) in b.bonds.iter().enumerate() {
-        let idx = b.g.add_bond(a, c, order[i].kind());
-        b.g.bonds[idx].direction = dirs[i];
+        };
+        let idx = b.g.add_bond(a, c, tok.kind());
+        b.g.bonds[idx].direction = dir;
     }
 
-    // Implicit H + label text per atom.
+    // Seed explicit (bracket) H first so kekulize can tell a pyridine-type N (two
+    // ring bonds, takes a ring double) from a pyrrole-type N (extra H, stays
+    // single), then assign the Kekulé double bonds across the aromatic system.
     for i in 0..n {
-        let elem = b.g.nodes[i].element.clone();
-        let charge = b.g.nodes[i].charge;
-        let bond_sum: i16 = b.g.adj[i]
-            .iter()
-            .map(|&(_, bi)| b.g.bonds[bi].kind.order() as i16)
-            .sum();
-        let h = match b.explicit_h[i] {
-            Some(h) => h,
-            None => match standard_valence(&elem) {
-                Some(v) => (v + charge_adjust(&elem, charge) - bond_sum).max(0) as u8,
-                None => 0,
-            },
-        };
-        b.g.nodes[i].hcount = h;
-        // label: carbons stay skeletal unless charged/isotope; heteroatoms labelled
-        let skeletal = elem == "C" && charge == 0 && b.g.nodes[i].isotope.is_none();
-        if !skeletal {
-            b.g.nodes[i].text = Some(make_label(&elem, h));
+        if let Some(h) = b.explicit_h[i] {
+            b.g.nodes[i].hcount = h;
+        }
+    }
+    b.g.kekulize_aromatic();
+
+    // With bond orders final, fill in the derived implicit H and the label text.
+    for i in 0..n {
+        if b.explicit_h[i].is_none() {
+            b.g.nodes[i].hcount = b.g.implicit_h(i);
+        }
+        let node = &b.g.nodes[i];
+        // carbons stay skeletal unless charged/isotopic; heteroatoms are labelled
+        if !(node.element == "C" && node.charge == 0 && node.isotope.is_none()) {
+            b.g.nodes[i].text = Some(make_label(&node.element.clone(), node.hcount));
         }
     }
 
     Ok(b.g)
-}
-
-/// Valence adjustment for charged heteroatoms (e.g. N+ has valence 4, O- valence 1).
-fn charge_adjust(elem: &str, charge: i8) -> i16 {
-    match elem {
-        "N" | "P" => charge as i16, // N+ -> 4 bonds, so +1 to available
-        "O" | "S" => charge as i16,
-        "C" => -(charge.abs() as i16),
-        _ => 0,
-    }
 }
 
 fn make_label(elem: &str, h: u8) -> String {
@@ -427,89 +374,6 @@ fn make_label(elem: &str, h: u8) -> String {
         format!("{elem}H")
     } else {
         format!("{elem}H{h}")
-    }
-}
-
-/// Greedy + augmenting Kekulization: aromatic atoms that need a double bond are
-/// matched along aromatic edges.
-fn kekulize(b: &Builder, order: &mut [BondTok]) {
-    let n = b.g.n();
-    // which atoms need a double bond in the pi system
-    let mut needs = vec![false; n];
-    for i in 0..n {
-        if !b.aromatic_atom[i] {
-            continue;
-        }
-        // an atom already carrying a double/triple bond (e.g. exocyclic c(=O))
-        // does not need a ring double bond.
-        let has_multiple = b
-            .bonds
-            .iter()
-            .any(|&(a, c, t)| (a == i || c == i) && matches!(t, BondTok::Double | BondTok::Triple));
-        if has_multiple {
-            continue;
-        }
-        let elem = &b.g.nodes[i].element;
-        let charge = b.g.nodes[i].charge;
-        // total connectivity (any bond + implicit H) distinguishes pyridine-type
-        // from pyrrole-type aromatic atoms.
-        let total_deg = b.bonds.iter().filter(|&&(a, c, _)| a == i || c == i).count()
-            + b.g.nodes[i].hcount as usize;
-        needs[i] = match elem.as_str() {
-            "C" => charge == 0,
-            // Pyridine-type N/P carries only its two ring bonds (no H/substituent)
-            // and takes a ring double bond; pyrrole-type N (3-connected via an H or
-            // substituent) donates its lone pair to the ring and stays all-single.
-            "N" | "P" => charge > 0 || total_deg <= 2,
-            "B" => true,
-            _ => false, // O, S donate a lone pair
-        };
-    }
-    // aromatic edges
-    let arom_edges: Vec<usize> = b
-        .bonds
-        .iter()
-        .enumerate()
-        .filter(|(_, &(_, _, t))| t == BondTok::Aromatic)
-        .map(|(i, _)| i)
-        .collect();
-
-    let mut matched = vec![false; n];
-    // greedy by ascending available degree
-    let mut atoms: Vec<usize> = (0..n).filter(|&i| needs[i]).collect();
-    atoms.sort_by_key(|&i| {
-        arom_edges
-            .iter()
-            .filter(|&&e| b.bonds[e].0 == i || b.bonds[e].1 == i)
-            .count()
-    });
-    for &i in &atoms {
-        if matched[i] {
-            continue;
-        }
-        // find an aromatic edge to an unmatched needing neighbor
-        for &e in &arom_edges {
-            let (a, c, _) = b.bonds[e];
-            let j = if a == i {
-                c
-            } else if c == i {
-                a
-            } else {
-                continue;
-            };
-            if needs[j] && !matched[j] {
-                order[e] = BondTok::Double;
-                matched[i] = true;
-                matched[j] = true;
-                break;
-            }
-        }
-    }
-    // remaining aromatic edges stay single
-    for &e in &arom_edges {
-        if order[e] == BondTok::Aromatic {
-            order[e] = BondTok::Single;
-        }
     }
 }
 
@@ -536,7 +400,10 @@ mod tests {
         assert_eq!(m.nodes.len(), 6);
         assert_eq!(m.bonds.len(), 6);
         assert_eq!(
-            m.bonds.iter().filter(|b| b.kind == BondKind::Double).count(),
+            m.bonds
+                .iter()
+                .filter(|b| b.kind == BondKind::Double)
+                .count(),
             3,
             "benzene kekulizes to 3 double bonds"
         );

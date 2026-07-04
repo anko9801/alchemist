@@ -9,19 +9,16 @@
 #import "@preview/cetz:0.5.2"
 #import cetz.draw: *
 #import "../../utils/utils.typ": convert-length
-#import "labels.typ": element-color
 #import "style.typ": chem-defaults
-#import "geometry.typ": box-trim, label-box
+#import "geometry.typ": atom-anchor, atom-pos, box-trim, curly-arc, label-box, resolve-scale
 
 #let draw-decorations(layout, name: "mol", config: (:)) = {
   let cfg = chem-defaults + config
   get-ctx(ctx => {
-  // resolve a font-relative bond length (e.g. atom-sep = 3em) to canvas-unit
-  // floats so the manual vector geometry below stays float-valued.
-  let s = if type(cfg.scale) == length { convert-length(ctx, cfg.scale) } else { cfg.scale }
+  let s = resolve-scale(ctx, cfg.scale)
   let stroke = cfg.stroke
   let margin = convert-length(ctx, cfg.label-clearance)
-  let P(i) = (layout.atoms.at(i).pos.x * s, layout.atoms.at(i).pos.y * s)
+  let P(i) = atom-pos(layout.atoms.at(i), s)
   // start point of a line leaving atom `from` toward (tx, ty), pulled back to
   // clear `from`'s label — same rule the bonds use, so overlay lines never run
   // into a glyph.
@@ -29,7 +26,7 @@
     let a = P(from)
     let (dx, dy) = (tx - a.at(0), ty - a.at(1))
     let len = calc.max(calc.sqrt(dx * dx + dy * dy), 1e-9)
-    let t = box-trim(label-box(ctx, name + "-a" + str(from), a.at(0), a.at(1)), dx / len, dy / len, margin)
+    let t = box-trim(label-box(ctx, atom-anchor(name, from), a.at(0), a.at(1)), dx / len, dy / len, margin)
     (a.at(0) + dx / len * t, a.at(1) + dy / len * t)
   }
 
@@ -105,19 +102,8 @@
 
   // ── electron-pushing curly arrows (addressed by atom id) ───────────────────
   for arr in cfg.arrows {
-    let a = P(arr.at(0))
-    let b = P(arr.at(1))
     let side = if arr.len() > 2 { arr.at(2) } else { 1 }
-    let dx = b.at(0) - a.at(0)
-    let dy = b.at(1) - a.at(1)
-    let len = calc.max(calc.sqrt(dx * dx + dy * dy), 1e-9)
-    let (ux, uy) = (dx / len, dy / len)
-    let (px, py) = (-uy * side, ux * side)
-    let (off, bend, pad) = (cfg.arrow.offset * s, cfg.arrow.bend * s, cfg.arrow.pad * s)
-    let p0 = (a.at(0) + ux * pad + px * off, a.at(1) + uy * pad + py * off)
-    let p3 = (b.at(0) - ux * pad * 0.2 + px * off * 0.55, b.at(1) - uy * pad * 0.2 + py * off * 0.55)
-    let c1 = (p0.at(0) + ux * len * 0.2 + px * bend, p0.at(1) + uy * len * 0.2 + py * bend)
-    let c2 = (p3.at(0) + px * bend, p3.at(1) + py * bend)
+    let (p0, p3, c1, c2) = curly-arc(P(arr.at(0)), P(arr.at(1)), side, cfg.arrow.offset * s, cfg.arrow.bend * s, cfg.arrow.pad * s)
     bezier(p0, p3, c1, c2, stroke: (paint: cfg.arrow.paint, thickness: stroke.thickness), mark: (end: ">", scale: 0.85))
   }
 

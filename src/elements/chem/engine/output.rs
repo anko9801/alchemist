@@ -77,17 +77,30 @@ pub struct LayoutOut {
 }
 
 use crate::graph::{valence_electrons, Graph};
+use crate::layout::rings::{largest_gap, ring_has_edge};
 
 /// Build the JSON output from a laid-out graph.
 pub fn build(g: &Graph) -> LayoutOut {
     let inner = crate::layout::ring_inner_dirs(g);
+    // which rings read as aromatic (all-aromatic atoms, or alternating Kekulé)
+    let arom: Vec<bool> = g.rings.iter().map(|r| ring_is_aromatic(g, r)).collect();
+    let (lo, hi) = bounds(g);
+    LayoutOut {
+        atoms: build_atoms(g),
+        bonds: build_bonds(g, &inner, &arom),
+        aromatic_rings: build_aromatic_rings(g, &arom),
+        bbox: Vec2::new(hi.x - lo.x, hi.y - lo.y),
+        formula: molecular_formula(g),
+        warnings: vec![],
+    }
+}
 
-    let atoms = g
-        .nodes
+fn build_atoms(g: &Graph) -> Vec<AtomOut> {
+    g.nodes
         .iter()
         .enumerate()
         .map(|(i, node)| {
-            let (x, y) = node.pos.unwrap_or((0.0, 0.0));
+            let (x, y) = g.pos(i);
             let lp = lone_pairs(g, i);
             let rad = radical(g, i);
             // place lone pairs first, then radicals, into the free angular gaps
@@ -122,19 +135,17 @@ pub fn build(g: &Graph) -> LayoutOut {
                 skeletal,
             }
         })
-        .collect();
+        .collect()
+}
 
-    // aromatic ring detection (all-aromatic atoms, or alternating Kekulé doubles)
-    let arom: Vec<bool> = g.rings.iter().map(|r| ring_is_aromatic(g, r)).collect();
-    let bond_arom = |bi: usize| -> bool {
+fn build_bonds(g: &Graph, inner: &[(f64, f64)], arom: &[bool]) -> Vec<BondOut> {
+    let bond_arom = |bi: usize| {
         g.rings
             .iter()
             .enumerate()
             .any(|(ri, r)| arom[ri] && ring_has_edge(r, g.bonds[bi].a, g.bonds[bi].b))
     };
-
-    let bonds = g
-        .bonds
+    g.bonds
         .iter()
         .enumerate()
         .map(|(bi, b)| BondOut {
@@ -145,25 +156,26 @@ pub fn build(g: &Graph) -> LayoutOut {
             inner: Vec2::new(inner[bi].0, inner[bi].1),
             aromatic: bond_arom(bi),
         })
-        .collect();
+        .collect()
+}
 
-    let aromatic_rings = g
-        .rings
+fn build_aromatic_rings(g: &Graph, arom: &[bool]) -> Vec<RingOut> {
+    g.rings
         .iter()
         .enumerate()
         .filter(|(ri, _)| arom[*ri])
         .map(|(_, r)| {
             let n = r.len();
             let nf = n as f64;
-            let cx = r.iter().map(|&a| g.nodes[a].pos.unwrap_or((0.0, 0.0)).0).sum::<f64>() / nf;
-            let cy = r.iter().map(|&a| g.nodes[a].pos.unwrap_or((0.0, 0.0)).1).sum::<f64>() / nf;
+            let cx = r.iter().map(|&a| g.pos(a).0).sum::<f64>() / nf;
+            let cy = r.iter().map(|&a| g.pos(a).1).sum::<f64>() / nf;
             // apothem (inscribed-circle radius): mean distance from the centroid to
             // the bond midpoints, so the GR-6 circle sits on the edges regardless of
             // ring size or slight irregularity.
             let rad = (0..n)
                 .map(|k| {
-                    let p = g.nodes[r[k]].pos.unwrap_or((0.0, 0.0));
-                    let q = g.nodes[r[(k + 1) % n]].pos.unwrap_or((0.0, 0.0));
+                    let p = g.pos(r[k]);
+                    let q = g.pos(r[(k + 1) % n]);
                     let (mx, my) = ((p.0 + q.0) / 2.0, (p.1 + q.1) / 2.0);
                     ((mx - cx).powi(2) + (my - cy).powi(2)).sqrt()
                 })
@@ -174,17 +186,7 @@ pub fn build(g: &Graph) -> LayoutOut {
                 radius: rad,
             }
         })
-        .collect();
-
-    let (lo, hi) = bounds(g);
-    LayoutOut {
-        atoms,
-        bonds,
-        aromatic_rings,
-        bbox: Vec2::new(hi.x - lo.x, hi.y - lo.y),
-        formula: molecular_formula(g),
-        warnings: vec![],
-    }
+        .collect()
 }
 
 /// Hill-system molecular formula (GR-2.4): carbon first, hydrogen second, then
@@ -201,17 +203,18 @@ fn molecular_formula(g: &Graph) -> Vec<(String, u32)> {
     for i in 0..g.n() {
         let node = &g.nodes[i];
         match &node.text {
-            // DSL multi-atom fragment: parse "C", "H", counts out of the label
+            // a multi-atom label (e.g. "CH3", "OH") already spells out its own
+            // hydrogens, so parse them straight out of the text.
             Some(t) if t.chars().any(|c| c.is_ascii_uppercase()) && !t.contains(['(', '[']) => {
                 for (sym, n) in parse_formula_atoms(t) {
                     add(&sym, n);
                 }
-                add("H", node.hcount as u32);
             }
+            // a bare vertex (skeletal carbon, or an unlabelled atom): its heavy
+            // atom plus its hydrogen count (explicit or valence-derived).
             _ => {
                 add(&node.element, 1);
-                let h = node.hcount as u32 + implicit_h(g, i) as u32;
-                add("H", h);
+                add("H", hydrogen_count(g, i) as u32);
             }
         }
     }
@@ -258,14 +261,6 @@ fn parse_formula_atoms(text: &str) -> Vec<(String, u32)> {
     out
 }
 
-fn ring_has_edge(ring: &[usize], a: usize, b: usize) -> bool {
-    (0..ring.len()).any(|i| {
-        let x = ring[i];
-        let y = ring[(i + 1) % ring.len()];
-        (x == a && y == b) || (x == b && y == a)
-    })
-}
-
 /// A ring is aromatic if every atom carries the aromatic flag (SMILES), or it is
 /// an even ring with a perfect alternation of single/double bonds (Kekulé).
 fn ring_is_aromatic(g: &Graph, ring: &[usize]) -> bool {
@@ -273,7 +268,7 @@ fn ring_is_aromatic(g: &Graph, ring: &[usize]) -> bool {
         return true;
     }
     let n = ring.len();
-    if n % 2 != 0 {
+    if !n.is_multiple_of(2) {
         return false;
     }
     let orders: Vec<u8> = (0..n)
@@ -295,7 +290,7 @@ fn lone_pair_dirs(g: &Graph, i: usize, count: usize) -> Vec<Vec2> {
     if count == 0 {
         return Vec::new();
     }
-    let p = g.nodes[i].pos.unwrap_or((0.0, 0.0));
+    let p = g.pos(i);
     let mut occ: Vec<f64> = g.adj[i]
         .iter()
         .filter_map(|&(v, _)| {
@@ -305,7 +300,9 @@ fn lone_pair_dirs(g: &Graph, i: usize, count: usize) -> Vec<Vec2> {
         })
         .collect();
     let angles: Vec<f64> = if occ.is_empty() {
-        (0..count).map(|k| PI / 2.0 + 2.0 * PI * k as f64 / count as f64).collect()
+        (0..count)
+            .map(|k| PI / 2.0 + 2.0 * PI * k as f64 / count as f64)
+            .collect()
     } else if occ.len() == 1 {
         let base = occ[0] + PI;
         if count == 1 {
@@ -318,16 +315,7 @@ fn lone_pair_dirs(g: &Graph, i: usize, count: usize) -> Vec<Vec2> {
         }
     } else {
         occ.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let mut best_start = occ[0];
-        let mut best_gap = 0.0;
-        for k in 0..occ.len() {
-            let s = occ[k];
-            let e = if k + 1 < occ.len() { occ[k + 1] } else { occ[0] + 2.0 * PI };
-            if e - s > best_gap {
-                best_gap = e - s;
-                best_start = s;
-            }
-        }
+        let (best_start, best_gap) = largest_gap(&occ);
         if count == 1 {
             vec![best_start + best_gap / 2.0]
         } else {
@@ -338,49 +326,38 @@ fn lone_pair_dirs(g: &Graph, i: usize, count: usize) -> Vec<Vec2> {
                 .collect()
         }
     };
-    angles.into_iter().map(|a| Vec2::new(a.cos(), a.sin())).collect()
+    angles
+        .into_iter()
+        .map(|a| Vec2::new(a.cos(), a.sin()))
+        .collect()
+}
+
+/// Hydrogen count on atom `i`: an explicit count (from a label or SMILES) is
+/// authoritative, otherwise it is derived from the valence.
+fn hydrogen_count(g: &Graph, i: usize) -> u8 {
+    if g.nodes[i].h_explicit {
+        g.nodes[i].hcount
+    } else {
+        g.implicit_h(i)
+    }
 }
 
 /// Hydrogens on a bare skeletal carbon (for the show-all-h option). Labeled
 /// atoms already show their H, so they report 0.
 fn implicit_h(g: &Graph, i: usize) -> u8 {
-    use crate::graph::standard_valence;
-    let node = &g.nodes[i];
-    if !node.is_skeletal() {
-        return 0;
+    if g.nodes[i].is_skeletal() {
+        hydrogen_count(g, i)
+    } else {
+        0
     }
-    if node.h_explicit {
-        return node.hcount; // SMILES: implicit H already computed into hcount
-    }
-    let bond_sum: i16 = g.adj[i]
-        .iter()
-        .map(|&(_, bi)| g.bonds[bi].kind.order() as i16)
-        .sum();
-    standard_valence(&node.element)
-        .map(|v| (v - node.charge as i16 - bond_sum).max(0) as u8)
-        .unwrap_or(0)
 }
 
 fn nonbonding_electrons(g: &Graph, i: usize) -> i16 {
-    use crate::graph::standard_valence;
     let node = &g.nodes[i];
     let Some(ve) = valence_electrons(&node.element) else {
         return 0;
     };
-    let bond_sum: i16 = g.adj[i]
-        .iter()
-        .map(|&(_, bi)| g.bonds[bi].kind.order() as i16)
-        .sum();
-    // bare skeletal carbons have implicit (uncounted) H filling their valence;
-    // for those, derive H from the valence so they read as closed-shell.
-    let h = if node.h_explicit {
-        node.hcount as i16
-    } else {
-        standard_valence(&node.element)
-            .map(|v| (v - node.charge as i16 - bond_sum).max(0))
-            .unwrap_or(0)
-    };
-    (ve - node.charge as i16 - bond_sum - h).max(0)
+    (ve - node.charge as i16 - g.bond_order_sum(i) - hydrogen_count(g, i) as i16).max(0)
 }
 
 fn lone_pairs(g: &Graph, i: usize) -> u8 {
@@ -402,11 +379,11 @@ fn radical(g: &Graph, i: usize) -> u8 {
 /// left grow right (bonded atom anchored west); bonds on both sides (or none)
 /// are centered.
 fn label_dir(g: &Graph, i: usize) -> String {
-    let p = g.nodes[i].pos.unwrap_or((0.0, 0.0));
+    let p = g.pos(i);
     let mut left = false;
     let mut right = false;
     for &(v, _) in &g.adj[i] {
-        let q = g.nodes[v].pos.unwrap_or((0.0, 0.0));
+        let q = g.pos(v);
         if q.0 > p.0 + 0.1 {
             right = true;
         } else if q.0 < p.0 - 0.1 {
@@ -425,8 +402,8 @@ fn label_dir(g: &Graph, i: usize) -> String {
 fn bounds(g: &Graph) -> (Vec2, Vec2) {
     let mut lo = Vec2::new(f64::INFINITY, f64::INFINITY);
     let mut hi = Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
-    for node in &g.nodes {
-        let (x, y) = node.pos.unwrap_or((0.0, 0.0));
+    for i in 0..g.n() {
+        let (x, y) = g.pos(i);
         lo.x = lo.x.min(x);
         lo.y = lo.y.min(y);
         hi.x = hi.x.max(x);

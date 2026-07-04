@@ -46,13 +46,13 @@ pub fn cg_input(input: &[u8]) -> Result<Vec<u8>, String> {
         serde_json::from_slice(input).map_err(|e| format!("invalid input json: {e}"))?;
     let g = front::parse(&input.format, &input.source)?;
     let mut s = String::new();
-    let _ = write!(s, "{}\n", g.n());
+    let _ = writeln!(s, "{}", g.n());
     for node in &g.nodes {
         let _ = write!(s, "{} ", graph::atomic_number(&node.element));
     }
     let _ = write!(s, "\n{}\n", g.bonds.len());
     for b in &g.bonds {
-        let _ = write!(s, "{} {} {}\n", b.a, b.b, b.kind.order());
+        let _ = writeln!(s, "{} {} {}", b.a, b.b, b.kind.order());
     }
     Ok(s.into_bytes())
 }
@@ -66,22 +66,46 @@ pub fn finish(meta: &[u8], coords: &[u8]) -> Result<Vec<u8>, String> {
         serde_json::from_slice(meta).map_err(|e| format!("invalid input json: {e}"))?;
     let mut graph = front::parse(&input.format, &input.source)?;
     let text = std::str::from_utf8(coords).map_err(|e| format!("coords not utf8: {e}"))?;
+    // coordgen output: nAtoms "x y" lines, then "R <k>" and k ring lines (the
+    // space-separated atom indices of each ring it perceived).
+    let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
     let mut pts: Vec<(f64, f64)> = Vec::with_capacity(graph.n());
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
+    for _ in 0..graph.n() {
+        let line = lines.next().ok_or("too few coordinate lines")?;
         let mut it = line.split_whitespace();
-        let x: f64 = it.next().and_then(|v| v.parse().ok()).ok_or("bad coord x")?;
-        let y: f64 = it.next().and_then(|v| v.parse().ok()).ok_or("bad coord y")?;
+        let x: f64 = it
+            .next()
+            .and_then(|v| v.parse().ok())
+            .ok_or("bad coord x")?;
+        let y: f64 = it
+            .next()
+            .and_then(|v| v.parse().ok())
+            .ok_or("bad coord y")?;
         pts.push((x, y));
     }
-    if pts.len() != graph.n() {
-        return Err(format!("coord count {} != atom count {}", pts.len(), graph.n()));
+    let mut rings: Vec<Vec<usize>> = Vec::new();
+    if let Some(hdr) = lines.next() {
+        let k: usize = hdr
+            .strip_prefix('R')
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+        for _ in 0..k {
+            if let Some(rl) = lines.next() {
+                rings.push(
+                    rl.split_whitespace()
+                        .filter_map(|v| v.parse().ok())
+                        .collect(),
+                );
+            }
+        }
     }
     let iupac = input.options.orientation.as_deref().unwrap_or("iupac") == "iupac";
-    layout::from_coords(&mut graph, &pts, iupac, input.options.rotation.to_radians());
-    Ok(serde_json::to_vec(&output::build(&graph)).map_err(|e| format!("serialize failed: {e}"))?)
+    layout::from_coords(
+        &mut graph,
+        &pts,
+        rings,
+        iupac,
+        input.options.rotation.to_radians(),
+    );
+    serde_json::to_vec(&output::build(&graph)).map_err(|e| format!("serialize failed: {e}"))
 }
-

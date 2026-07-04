@@ -38,7 +38,11 @@ fn directional_neighbor(g: &Graph, center: usize, partner: usize) -> Option<(usi
         if b.direction == 0 {
             continue;
         }
-        let side = if b.a == center { b.direction } else { -b.direction };
+        let side = if b.a == center {
+            b.direction
+        } else {
+            -b.direction
+        };
         if found.is_some() {
             return None; // ambiguous
         }
@@ -163,7 +167,11 @@ fn wedge_for_center(g: &Graph, c: usize, parity: f64) -> Option<(usize, bool, Bo
         Some(bi) => {
             let other = {
                 let b = &g.bonds[bi];
-                if b.a == c { b.b } else { b.a }
+                if b.a == c {
+                    b.b
+                } else {
+                    b.a
+                }
             };
             slots.iter().position(|s| *s == Some(other))?
         }
@@ -176,14 +184,14 @@ fn wedge_for_center(g: &Graph, c: usize, parity: f64) -> Option<(usize, bool, Bo
     for (i, slot) in slots.iter().enumerate() {
         d[i] = if i == out_idx {
             let dir = match slot {
-                Some(o) => unit(g.nodes[*o].pos.unwrap(), cpos),
+                Some(o) => super::unit(g.nodes[*o].pos.unwrap(), cpos),
                 None => h_dir,
             };
             [dir.0, dir.1, 1.0]
         } else {
             match slot {
                 Some(o) => {
-                    let dir = unit(g.nodes[*o].pos.unwrap(), cpos);
+                    let dir = super::unit(g.nodes[*o].pos.unwrap(), cpos);
                     [dir.0, dir.1, 0.0]
                 }
                 None => [h_dir.0, h_dir.1, -1.0],
@@ -240,10 +248,7 @@ fn pick_substituent(g: &Graph, c: usize, nbonds: &[usize]) -> Option<usize> {
 fn implicit_h_dir(g: &Graph, c: usize, cpos: (f64, f64)) -> (f64, f64) {
     let mut occ: Vec<f64> = g.adj[c]
         .iter()
-        .map(|&(v, _)| {
-            let p = g.nodes[v].pos.unwrap_or(cpos);
-            (p.1 - cpos.1).atan2(p.0 - cpos.0)
-        })
+        .map(|&(v, _)| super::angle(g.nodes[v].pos.unwrap_or(cpos), cpos))
         .collect();
     if occ.is_empty() {
         return (0.0, -1.0);
@@ -252,16 +257,6 @@ fn implicit_h_dir(g: &Graph, c: usize, cpos: (f64, f64)) -> (f64, f64) {
     let (start, gap) = super::rings::largest_gap(&occ);
     let a = start + gap / 2.0;
     (a.cos(), a.sin())
-}
-
-fn unit(p: (f64, f64), o: (f64, f64)) -> (f64, f64) {
-    let (dx, dy) = (p.0 - o.0, p.1 - o.1);
-    let l = (dx * dx + dy * dy).sqrt();
-    if l > 1e-12 {
-        (dx / l, dy / l)
-    } else {
-        (dx, dy)
-    }
 }
 
 fn signed_volume(d: &[[f64; 3]; 4]) -> f64 {

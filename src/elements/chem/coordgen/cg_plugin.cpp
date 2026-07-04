@@ -2,19 +2,25 @@
 //
 // Input  (one arg, whitespace-separated decimal ints):
 //   nAtoms  Z0 Z1 ... Z[nA-1]  nBonds  (a b order) x nBonds
-// Output (text, one atom per line):
-//   "x y\n" in coordgen's native scale (~50 units per bond; caller normalises)
+// Output (text):
+//   nAtoms lines "x y" in coordgen's native scale (~50 units per bond), then a
+//   line "R <nRings>", then one line per ring listing its space-separated atom
+//   indices. Rings are perceived by coordgen (SSSR); the caller reuses them
+//   instead of re-deriving ring membership.
 //
 // Built to a self-contained wasm via emscripten; the WASI/env imports it pulls
 // in are stubbed out with binaryen wasm-merge (see build.sh) so the only imports
 // left are the two `typst_env` protocol functions Typst provides.
 
 #include "sketcherMinimizer.h"
+#include "sketcherMinimizerAtom.h"
+#include "sketcherMinimizerRing.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 extern "C" {
@@ -81,6 +87,23 @@ extern "C" __attribute__((export_name("layout"))) int32_t layout(int32_t in_len)
         int n = std::snprintf(buf, sizeof(buf), "%.4f %.4f\n", (double)c.x(), (double)c.y());
         out.append(buf, (size_t)n);
     }
+
+    // Rings perceived by coordgen (SSSR), so the caller need not re-derive them.
+    std::unordered_map<sketcherMinimizerAtom *, long> idx;
+    for (long i = 0; i < nA; ++i) idx[atoms[(size_t)i]] = i;
+    auto &rings = mol->getRings();
+    int n = std::snprintf(buf, sizeof(buf), "R %zu\n", rings.size());
+    out.append(buf, (size_t)n);
+    for (auto *ring : rings) {
+        bool first = true;
+        for (auto *a : ring->getAtoms()) {
+            n = std::snprintf(buf, sizeof(buf), first ? "%ld" : " %ld", idx[a]);
+            out.append(buf, (size_t)n);
+            first = false;
+        }
+        out.push_back('\n');
+    }
+
     send_result(reinterpret_cast<const uint8_t *>(out.data()), out.size());
     return 0;
 }

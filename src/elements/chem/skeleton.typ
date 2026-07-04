@@ -15,7 +15,7 @@
 #import "../../elements/lewis.typ": lewis-double, lewis-line, lewis-single
 #import "labels.typ": format-label, element-color, element-groups, group-math
 #import "style.typ": chem-defaults
-#import "geometry.typ": box-trim, label-box
+#import "geometry.typ": atom-anchor, atom-pos, box-trim, label-box, resolve-scale
 
 // membership test for a bond {from,to} in an unordered atom-pair list
 #let pair-in(list, f, t) = list.any(p => (p.at(0) == f and p.at(1) == t) or (p.at(0) == t and p.at(1) == f))
@@ -54,13 +54,16 @@
   not atom.skeletal or (cfg.show-all-h and atom.at("implicit_h", default: 0) > 0)
 }
 
+// an alchemist fragment dict; `count`/`empty` follow from the sub-atom list
+#let make-fragment(name, atoms, colors: none, lewis: (), vertical: false, empty: false) = (
+  type: "fragment", name: name, atoms: atoms, colors: colors,
+  links: (:), lewis: lewis, vertical: vertical, count: atoms.len(), empty: empty,
+)
+
 // Build a native alchemist fragment dict for one engine atom.
 #let atom-fragment(atom, name, cfg) = {
   if not is-labeled(atom, cfg) {
-    return (
-      type: "fragment", name: name, atoms: ((none, true),), colors: none,
-      links: (:), lewis: (), vertical: false, count: 1, empty: true,
-    )
+    return make-fragment(name, ((none, true),), empty: true)
   }
   // lone pairs / radicals as alchemist lewis elements, from engine directions
   let lewis = ()
@@ -73,44 +76,27 @@
   }
   let clr = element-color(atom.element, cfg.color, cfg.atom-colors)
   let colors = if clr != black { clr } else { none }
-  let vertical = cfg.vertical.contains(atom.id) and not atom.skeletal
   let ox = cfg.oxidation.at(str(atom.id), default: none)
   let reversed = atom.at("label_dir", default: "center") == "left"
+  let groups = element-groups(atom.text)
+  let atoms(order) = order.map(gp => (group-math(gp.sym, gp.sub), true))
 
-  // A vertical label (GR-2.1.7) is split into element groups so they stack
-  // top-to-bottom; the heavy atom is first (= the connecting sub-atom).
-  if vertical {
-    let g = element-groups(atom.text)
-    if g != none {
-      let heavy = g.filter(x => x.sym == atom.element)
-      let groups = heavy + g.filter(x => x.sym != atom.element)
-      let atoms = groups.map(gp => (group-math(gp.sym, gp.sub), true))
-      return (
-        type: "fragment", name: name, atoms: atoms, colors: colors,
-        links: (:), lewis: lewis, vertical: true, count: groups.len(), empty: false,
-      )
+  if groups != none {
+    let heavy = groups.filter(x => x.sym == atom.element)
+    let rest = groups.filter(x => x.sym != atom.element)
+    // GR-2.1.7 vertical: element groups stacked, heavy atom first (the connector)
+    if cfg.vertical.contains(atom.id) and not atom.skeletal {
+      return make-fragment(name, atoms(heavy + rest), colors: colors, lewis: lewis, vertical: true)
+    }
+    // GR-2.1.5 plain: groups left-to-right, heavy atom at the connecting end (first
+    // for a right label "CH2", last for a reversed left label "H2C"), so the bond
+    // meets the *element symbol* on the coordinate — not the whole-"CH2"-box centre.
+    if atom.charge == 0 and atom.isotope == none and ox == none {
+      return make-fragment(name, atoms(if reversed { rest + heavy } else { heavy + rest }), colors: colors, lewis: lewis)
     }
   }
-  // A plain label (GR-2.1.5) is split into element groups placed left-to-right with
-  // the heavy atom at the connecting end (first for a right label "CH2", last for a
-  // reversed left label "H2C"), so the bond meets the *element symbol* on the atom
-  // coordinate — not the centre of the whole "CH2" box.
-  let g = element-groups(atom.text)
-  if g != none and atom.charge == 0 and atom.isotope == none and ox == none {
-    let heavy = g.filter(x => x.sym == atom.element)
-    let rest = g.filter(x => x.sym != atom.element)
-    let groups = if reversed { rest + heavy } else { heavy + rest }
-    let atoms = groups.map(gp => (group-math(gp.sym, gp.sub), true))
-    return (
-      type: "fragment", name: name, atoms: atoms, colors: colors,
-      links: (:), lewis: lewis, vertical: false, count: groups.len(), empty: false,
-    )
-  }
-  (
-    type: "fragment", name: name,
-    atoms: ((format-label(atom, reversed: reversed, oxidation: ox), true),),
-    colors: colors, links: (:), lewis: lewis, vertical: false, count: 1, empty: false,
-  )
+  // charged / isotopic / oxidation labels: one GR-formatted blob
+  make-fragment(name, ((format-label(atom, reversed: reversed, oxidation: ox), true),), colors: colors, lewis: lewis)
 }
 
 // Render a LayoutOut to CeTZ drawables (compose inside any canvas).
@@ -124,7 +110,7 @@
   alch.double.stroke = cfg.stroke
   alch.triple.stroke = cfg.stroke
 
-  let aname(i) = name + "-a" + str(i)
+  let aname(i) = atom-anchor(name, i)
   let atom(i) = layout.atoms.at(i)
   let frags = layout.atoms.map(a => atom-fragment(a, aname(a.id), cfg))
   // sub-atom index of the heavy atom every bond should connect to (the element
@@ -139,11 +125,11 @@
     // bonds below can measure each label's box and trim themselves to clear it.
     cetz.draw.get-ctx(cetz-ctx => {
       import cetz.draw: *
-      let s = if type(cfg.scale) == length { convert-length(cetz-ctx, cfg.scale) } else { cfg.scale }
+      let s = resolve-scale(cetz-ctx, cfg.scale)
       let ctx = (..default-ctx, config: alch)
       for (i, a) in layout.atoms.enumerate() {
         let frag = frags.at(i)
-        let coord = (a.pos.x * s, a.pos.y * s)
+        let coord = atom-pos(a, s)
         let conn = conn-idx(a.id)
         group(name: aname(a.id), anchor: "conn", {
           anchor("default", coord)
@@ -164,12 +150,13 @@
     // bond, and no white box or halo is painted over anything.
     cetz.draw.get-ctx(cetz-ctx => {
       import cetz.draw: *
-      let s = if type(cfg.scale) == length { convert-length(cetz-ctx, cfg.scale) } else { cfg.scale }
+      let s = resolve-scale(cetz-ctx, cfg.scale)
       let margin = convert-length(cetz-ctx, cfg.label-clearance)
       let lctx = (..default-ctx, config: alch)
       // label box of each atom relative to its coordinate (none for bare vertices)
       let boxes = layout.atoms.map(a => if is-labeled(a, cfg) {
-        label-box(cetz-ctx, aname(a.id), a.pos.x * s, a.pos.y * s)
+        let (x, y) = atom-pos(a, s)
+        label-box(cetz-ctx, aname(a.id), x, y)
       } else { none })
       let trim(bx, ux, uy) = box-trim(bx, ux, uy, margin)
       let stroke = cfg.stroke
@@ -178,8 +165,8 @@
       let g = convert-length(cetz-ctx, alch.double.gap)
       let bent-off = cfg.bent-kink * s
       for b in layout.bonds {
-        let a = (atom(b.from).pos.x * s, atom(b.from).pos.y * s)
-        let c = (atom(b.to).pos.x * s, atom(b.to).pos.y * s)
+        let a = atom-pos(atom(b.from), s)
+        let c = atom-pos(atom(b.to), s)
         let dx = c.at(0) - a.at(0)
         let dy = c.at(1) - a.at(1)
         let len = calc.max(calc.sqrt(dx * dx + dy * dy), 1e-9)

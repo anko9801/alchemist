@@ -5,7 +5,7 @@
 //! vertices and rotate it onto the x-axis, then mirror so the highest-priority
 //! functional group sits on the right.
 
-use super::Pt;
+use super::{center, centroid, rotate, Pt};
 use crate::graph::Graph;
 
 pub fn orient(g: &Graph, coords: &mut [Pt]) {
@@ -36,7 +36,6 @@ pub fn orient(g: &Graph, coords: &mut [Pt]) {
     //   GR-3.1.2 principal group to the right   (highest)
     //   GR-3.2.2 branching double bonds upward
     //   GR-3.1.3 principal ring system bottom-left  ("absent an overriding concern")
-    let pring = principal_ring_atoms(g);
     let mut best = (f64::NEG_INFINITY, 1.0, 1.0);
     for &fx in &[1.0, -1.0] {
         for &fy in &[1.0, -1.0] {
@@ -121,19 +120,6 @@ fn score(g: &Graph, coords: &[Pt], pg: Option<usize>, pring: &[usize], fx: f64, 
     s
 }
 
-fn center(coords: &mut [Pt]) {
-    if coords.is_empty() {
-        return;
-    }
-    let n = coords.len() as f64;
-    let cx = coords.iter().map(|p| p.0).sum::<f64>() / n;
-    let cy = coords.iter().map(|p| p.1).sum::<f64>() / n;
-    for p in coords.iter_mut() {
-        p.0 -= cx;
-        p.1 -= cy;
-    }
-}
-
 /// For ring systems, rotate so the bond carrying the principal group out of the
 /// ring lies along +x — putting the principal group on the right (GR-3.1.2) and
 /// the ring on the left (GR-3.1.3). Acyclic molecules return false so the caller
@@ -148,9 +134,7 @@ fn rotate_principal_group_right(g: &Graph, coords: &mut [Pt], pg: Option<usize>)
     // group atom is itself in the ring, use ring-centroid → that atom.
     let axis = if is_ring(p) {
         let ring: Vec<usize> = (0..g.n()).filter(|&i| is_ring(i)).collect();
-        let n = ring.len() as f64;
-        let cx = ring.iter().map(|&i| coords[i].0).sum::<f64>() / n;
-        let cy = ring.iter().map(|&i| coords[i].1).sum::<f64>() / n;
+        let (cx, cy) = centroid(coords, &ring);
         Some((coords[p].0 - cx, coords[p].1 - cy))
     } else {
         // BFS from pg until a ring atom; the bond (ring atom → its predecessor)
@@ -181,12 +165,7 @@ fn rotate_principal_group_right(g: &Graph, coords: &mut [Pt], pg: Option<usize>)
     if vx * vx + vy * vy < 0.04 {
         return false;
     }
-    let angle = vy.atan2(vx);
-    let (s, c) = (-angle).sin_cos();
-    for q in coords.iter_mut() {
-        let (x, y) = *q;
-        *q = (x * c - y * s, x * s + y * c);
-    }
+    rotate(coords, -vy.atan2(vx));
     true
 }
 
@@ -201,9 +180,7 @@ fn orient_ring_system_flat(g: &Graph, ring_atoms: &[usize], coords: &mut [Pt]) {
         return;
     }
     let inset: std::collections::HashSet<usize> = ring_atoms.iter().copied().collect();
-    let n = ring_atoms.len() as f64;
-    let cx = ring_atoms.iter().map(|&i| coords[i].0).sum::<f64>() / n;
-    let cy = ring_atoms.iter().map(|&i| coords[i].1).sum::<f64>() / n;
+    let (cx, cy) = centroid(coords, ring_atoms);
     let mut best_ang = 0.0;
     let mut best_cos = f64::NEG_INFINITY;
     for b in &g.bonds {
@@ -212,20 +189,15 @@ fn orient_ring_system_flat(g: &Graph, ring_atoms: &[usize], coords: &mut [Pt]) {
         }
         let mx = (coords[b.a].0 + coords[b.b].0) / 2.0 - cx;
         let my = (coords[b.a].1 + coords[b.b].1) / 2.0 - cy;
-        let ang = my.atan2(mx);
         // closeness to straight-down (-π/2): maximise cos(ang - (-π/2))
+        let ang = my.atan2(mx);
         let c = (ang + PI / 2.0).cos();
         if c > best_cos {
             best_cos = c;
             best_ang = ang;
         }
     }
-    let rot = -PI / 2.0 - best_ang;
-    let (s, c) = rot.sin_cos();
-    for p in coords.iter_mut() {
-        let (x, y) = *p;
-        *p = (x * c - y * s, x * s + y * c);
-    }
+    rotate(coords, -PI / 2.0 - best_ang);
 }
 
 fn rotate_principal_axis(coords: &mut [Pt]) {
@@ -240,12 +212,10 @@ fn rotate_principal_axis(coords: &mut [Pt]) {
         }
     }
     let (i, j, _) = best;
-    let angle = (coords[j].1 - coords[i].1).atan2(coords[j].0 - coords[i].0);
-    let (s, c) = (-angle).sin_cos();
-    for p in coords.iter_mut() {
-        let (x, y) = *p;
-        *p = (x * c - y * s, x * s + y * c);
-    }
+    rotate(
+        coords,
+        -(coords[j].1 - coords[i].1).atan2(coords[j].0 - coords[i].0),
+    );
 }
 
 /// The vertex of the most senior characteristic group (GR-3.1.2). Seniority is
@@ -266,9 +236,9 @@ fn principal_group(g: &Graph) -> Option<usize> {
 fn seniority(g: &Graph, i: usize) -> i32 {
     let elem = g.nodes[i].element.as_str();
     let carbon_with = |c: usize, want_order: u8| -> bool {
-        g.adj[c].iter().any(|&(o, bo)| {
-            g.nodes[o].element == "O" && g.bonds[bo].kind.order() == want_order
-        })
+        g.adj[c]
+            .iter()
+            .any(|&(o, bo)| g.nodes[o].element == "O" && g.bonds[bo].kind.order() == want_order)
     };
     match elem {
         "O" => {
@@ -287,7 +257,9 @@ fn seniority(g: &Graph, i: usize) -> i32 {
                     let ester = g.adj[c].iter().any(|&(o, bo)| {
                         g.nodes[o].element == "O"
                             && g.bonds[bo].kind.order() == 1
-                            && g.adj[o].iter().any(|&(o2, _)| o2 != c && g.nodes[o2].element == "C")
+                            && g.adj[o]
+                                .iter()
+                                .any(|&(o2, _)| o2 != c && g.nodes[o2].element == "C")
                     });
                     s = s.max(if ester { 90 } else { 100 });
                 } else if g.bonds[bi].kind.order() == 2 {
@@ -300,9 +272,9 @@ fn seniority(g: &Graph, i: usize) -> i32 {
         }
         "N" => {
             // amide N sits next to a carbonyl carbon
-            let amide = g.adj[i].iter().any(|&(c, _)| {
-                g.nodes[c].element == "C" && carbon_with(c, 2)
-            });
+            let amide = g.adj[i]
+                .iter()
+                .any(|&(c, _)| g.nodes[c].element == "C" && carbon_with(c, 2));
             if amide {
                 50
             } else {
