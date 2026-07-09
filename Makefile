@@ -7,11 +7,11 @@ check:
 	rm ./lib.pdf
 
 link :
-	mkdir -p ~/.cache/typst/packages/preview/alchemist
-	ln -s "$(CURDIR)" ~/.cache/typst/packages/preview/alchemist/$(VERSION)
+	mkdir -p ~/.cache/typst/packages/preview/${PACKAGE_NAME}
+	ln -s "$(CURDIR)" ~/.cache/typst/packages/preview/${PACKAGE_NAME}/$(VERSION)
 
 clean-link:
-	rm -rf ~/.cache/typst/packages/preview/alchemist
+	rm -rf ~/.cache/typst/packages/preview/${PACKAGE_NAME}
 
 module:
 	mkdir -p $(TARGET_DIR)
@@ -20,7 +20,7 @@ module:
 	cp ./LICENSE $(TARGET_DIR)/
 	cp ./lib.typ $(TARGET_DIR)/
 	cp -r ./src/* $(TARGET_DIR)/src/
-	sed 's|https://typst.app/universe/package/alchemist|https://github.com/Typsium/alchemist|g' ./README.md > $(TARGET_DIR)/README.md
+	sed 's|https://typst.app/universe/package/${PACKAGE_NAME}|https://github.com/Typsium/${PACKAGE_NAME}|g' ./README.md > $(TARGET_DIR)/README.md
 	sed -i "s/\/master\//\/$(VERSION)\//g" $(TARGET_DIR)/README.md
 	sed -E -i 's/:[0-9]+\.[0-9]+\.[0-9]+/:$(VERSION)/g' $(TARGET_DIR)/README.md
 	
