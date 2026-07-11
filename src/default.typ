@@ -10,6 +10,10 @@
   single: (
     stroke: black,
   ),
+  dative: (
+    stroke: black,
+    arrow-head: ">",
+  ),
   double: (
     gap: .25em,
     offset: "center",
