@@ -27,7 +27,10 @@
   let ignore-from-margins = false
 
   if ctx.last-anchor.type == "coord" {
-    from-pos = ctx.last-anchor.anchor
+    from-pos = (
+      ctx.last-anchor.anchor.at(0),
+      ctx.last-anchor.anchor.at(1),
+    )
   } else if ctx.last-anchor.type == "fragment" {
     from-connection = link-fragment-index(
       link-angle,
@@ -65,7 +68,7 @@
       hide: ctx.hide,
       name: link-name,
       override: override,
-      from-pos: from-pos,
+      from-pos: link-name + "-start-anchor",
       from-name: from-name,
       from: from-connection,
       to-name: to-name,
