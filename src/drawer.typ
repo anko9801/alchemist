@@ -20,6 +20,7 @@
 #let default-ctx = (
   // general
   last-anchor: default-anchor, // keep trace of the place to draw
+  origin-anchor: default-anchor, // this should be considered (0,0) for absolute placed elements
   last-name: "", // last name used to draw
   links: (), // list of links to draw
   hooks: (:), // list of hooks
@@ -133,7 +134,12 @@
       } else if element.type == "fragment" {
         (ctx, drawing) = fragment.draw-fragment(element, ctx)
       } else if element.type == "place" {
-        (ctx, drawing) = fragment.draw-fragment(element.fragment, ctx, centered-on: element.centered-on, first-anchor: element.anchor, coord: element.pos)
+        (ctx, drawing) = fragment.draw-fragment(
+          element.fragment,
+          ctx, centered-on: element.centered-on, 
+          first-anchor: element.anchor, 
+          coord: (to: ctx.origin-anchor.anchor, rel: element.pos)
+        )
       } else if element.type == "link" {
         (ctx, drawing) = link.draw-link(element, ctx)
       } else if element.type == "branch" {
@@ -362,7 +368,9 @@
               ctx.last-anchor.anchor,
             )
           }
+          ctx.origin-anchor = ctx.last-anchor
           let last-anchor = ctx.last-anchor
+          
           let (ctx, atoms, cetz-drawing) = draw-fragments-and-link(ctx, body)
           for (links, name, from-mol, ignore-from-margin) in ctx.hooks-links {
             ctx = draw-hooks-links(
@@ -389,11 +397,11 @@
             molecule-bounds,
           )
 
+          let (_, origin-anchor) = cetz.coordinate.resolve(
+            cetz-ctx,
+            last-anchor.anchor,
+          )
           let (translate-x, translate-y) = if after-operator {
-            let (_, origin-anchor) = cetz.coordinate.resolve(
-              cetz-ctx,
-              last-anchor.anchor,
-            )
             (
               origin-anchor.at(0) - molecule-bounds.low.at(0),
               origin-anchor.at(1) - (
@@ -435,9 +443,13 @@
             ),
           )
           scope({
+            set-origin(origin-anchor)
             translate(x: translate-x, y: translate-y)
             draw-link-decoration(ctx).at(1)
             on-layer(2, cetz-drawing)
+          })
+          scope({
+            translate(x: translate-x, y: translate-y)
             let bound-rect = cetz.draw.rect(
               molecule-bounds.low,
               molecule-bounds.high,

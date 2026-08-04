@@ -304,6 +304,7 @@
     ),
   )
 }
+
 #let place(pos, fragment, anchor: "center", centered-on: none) = {
   if fragment.len() != 1 {
     panic("Place can only be used with a single fragment")
