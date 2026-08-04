@@ -2,28 +2,33 @@
 #import "../utils/anchors.typ": *
 #import "@preview/cetz:0.5.2"
 
+/// Place, name and draw the text elements of a molecule fragment at the right position.
+///
+/// - ctx (dict): alchemist context
+/// - mol (dict): fragment infos
+/// - pos (list | str): position to place the fragment on
+/// -> cetz drawing functions
 #let draw-fragment-text(ctx, mol, pos) = {
   import cetz.draw: *
   let id = 0
   let no-anchor-id = 0
   let last-anchor-name = none
+
+  let fragment-font = ctx.config.fragment-font
+  let fragment-color = if mol.colors == none {
+    (_) => ctx.config.fragment-color
+  } else if type(mol.colors) == color {
+    (_) => mol.colors
+  } else {
+    (id) => mol.colors.at(calc.min(id, mol.colors.len() - 1))
+  }
+
   for (eq, anchored) in mol.atoms {
     let name = str(id)
     if not anchored {
       name += str(no-anchor-id)
       no-anchor-id += 1
     }
-
-    let color = if mol.colors != none {
-      if type(mol.colors) == color {
-        mol.colors
-      } else {
-        mol.colors.at(calc.min(id, mol.colors.len() - 1))
-      }
-    } else {
-      ctx.config.fragment-color
-    }
-    let fragment-font = ctx.config.fragment-font
 
     // draw atoms of the group one after the other from left to right
     content(
@@ -45,7 +50,8 @@
       auto-scale: false,
       {
         show math.equation: math.upright
-        set text(fill: color) if color != none
+        let c = fragment-color(id)
+        set text(fill: c) if c != none
         set text(font: fragment-font) if fragment-font != none
         eq
       },
@@ -96,7 +102,7 @@
   })
 }
 
-#let draw-fragment-elements(mol, ctx) = {
+#let draw-fragment-elements(mol, ctx, centered-on, first-anchor, coord) = {
   let name = mol.name
   if name in ctx.hooks {
     panic("Molecule fragment with name " + name + " already exists : " + ctx
@@ -105,8 +111,18 @@
       .join(", "))
   }
   ctx.hooks.insert(name, mol)
-
-  let (group-anchor, side, coord) = if ctx.last-anchor.type == "coord" {
+  
+  // group anchor => which element the fragment is centered on
+  // side => if the fragment is placed on the right side of the last anchor, bypass the rest
+  // coord => the coordinate to place the fragment on
+  let (group-anchor, side, coord) = if coord != none {
+    let group-anchor = if centered-on != none {
+      (name: str(centered-on), anchor: "mid")
+    } else {
+      (name: "0", anchor: "mid")
+    }
+    (group-anchor, false, coord)
+  } else if ctx.last-anchor.type == "coord" {
     ("west", true, ctx.last-anchor.anchor)
   } else if ctx.last-anchor.type == "link" {
     if ctx.last-anchor.to == none {
@@ -123,6 +139,7 @@
   } else {
     panic("A molecule fragment must be linked to a coord or a link")
   }
+  assert(coord != none, message: "A molecule fragment must be linked to a coord or a link")
   ctx = context_.set-last-anchor(
     ctx,
     (
@@ -164,7 +181,7 @@
   if ctx.first-branch {
     panic("A molecule fragment can not be the first element in a cycle")
   }
-  let (ctx, drawing) = draw-fragment-elements(element, ctx)
+  let (ctx, drawing) = draw-fragment-elements(element, ctx, centered-on, first-anchor, coord)
   if element.links.len() != 0 {
     ctx.hooks.insert(ctx.last-anchor.name, element)
     ctx.hooks-links.push((
