@@ -291,17 +291,20 @@
   top-level: true,
 ) = {
   let result = ((),)
-  let has_element = false
+  let has-element = false
+  let has-place = false
   for element in body {
     if type(element) == dictionary {
-      has_element = true
+      has-element = true
       if element.at("name", default: none) == none {
         if element.type == "fragment" {
           element.name = "fragment-" + str(group-id)
           group-id += 1
         } else if element.type == "place" {
-          element.fragment.name = "fragment-" + str(group-id)
-          group-id += 1
+          if element.fragment.at("name", default: none) == none {
+            element.fragment.name = "fragment-" + str(group-id)
+            group-id += 1
+          }
         } else if element.type == "link" {
           element.name = "link-" + str(link-id)
           link-id += 1
@@ -312,13 +315,15 @@
       }
       if element.at("body", default: none) != none {
         let child-body
-        (child-body, group-id, link-id, operator-id) = preprocessing(
+        let has-place
+        (child-body, group-id, link-id, operator-id, has-place) = preprocessing(
           element.body,
           group-id: group-id,
           link-id: link-id,
           operator-id: operator-id,
           top-level: false,
         )
+        element.hasplace = has-place
         if element.type == "parenthesis" and element.resonance {
           element.body = child-body
         } else {
@@ -333,6 +338,9 @@
       } else {
         result.at(-1).push(element)
       }
+      if element.type == "place" {
+        has-place = true
+      }
     } else if type(element) == function {
       result.at(-1).push(element)
     } else if element == none {
@@ -343,10 +351,10 @@
       ) + " with value " + repr(element))
     }
   }
-  if top-level and not has_element {
+  if top-level and not has-element {
     panic("The skeletize body must contain at least one element", body)
   }
-  (result, group-id, link-id, operator-id)
+  (result, group-id, link-id, operator-id, has-place)
 }
 
 #let operator-group-name = id => {
