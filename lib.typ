@@ -304,3 +304,22 @@
     ),
   )
 }
+#let place(pos, fragment, anchor: "center", centered-on: none) = {
+  if fragment.len() != 1 {
+    panic("Place can only be used with a single fragment")
+  } else {
+    fragment = fragment.at(0)
+  }
+  if fragment.type != "fragment" {
+    panic("Place can only be used with fragments")
+  }
+  (
+    (
+      type: "place",
+      pos: pos,
+      anchor: anchor,
+      fragment: fragment,
+      centered-on: centered-on,
+    ),
+  )
+}

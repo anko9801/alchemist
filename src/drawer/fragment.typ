@@ -160,7 +160,7 @@
   )
 }
 
-#let draw-fragment(element, ctx) = {
+#let draw-fragment(element, ctx, centered-on: none, first-anchor: none, coord: none) = {
   if ctx.first-branch {
     panic("A molecule fragment can not be the first element in a cycle")
   }

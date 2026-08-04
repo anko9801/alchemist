@@ -132,6 +132,8 @@
         panic("Element " + repr(element) + " has no type")
       } else if element.type == "fragment" {
         (ctx, drawing) = fragment.draw-fragment(element, ctx)
+      } else if element.type == "place" {
+        (ctx, drawing) = fragment.draw-fragment(element.fragment, ctx, centered-on: element.centered-on, first-anchor: element.anchor, coord: element.pos)
       } else if element.type == "link" {
         (ctx, drawing) = link.draw-link(element, ctx)
       } else if element.type == "branch" {
@@ -290,6 +292,9 @@
       if element.at("name", default: none) == none {
         if element.type == "fragment" {
           element.name = "fragment-" + str(group-id)
+          group-id += 1
+        } else if element.type == "place" {
+          element.fragment.name = "fragment-" + str(group-id)
           group-id += 1
         } else if element.type == "link" {
           element.name = "link-" + str(link-id)
