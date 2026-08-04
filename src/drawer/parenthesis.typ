@@ -2,16 +2,23 @@
 #import "@preview/cetz:0.5.2"
 
 #let left-parenthesis-anchor(parenthesis, ctx) = {
+  let left-name = parenthesis.at("left")
+  let left-type = ""
+  if left-name != none {
+    left-type = utils.get-element-type(parenthesis.body, left-name)
+    if left-type == none {
+      panic("The left element of the parenthesis does not exist")
+    }
+  } else {
+    left-type = parenthesis.body.at(0).type
+    left-name = parenthesis.body.at(0).at("name", default: none)
+  }
   let anchor = if parenthesis.hasplace {
     none
-  } else if parenthesis.body.at(0).type == "fragment" {
-    let name = parenthesis.body.at(0).name
-    parenthesis.body.at(0).name = name
-    (name: name, anchor: "west")
-  } else if parenthesis.body.at(0).type == "link" {
-    let name = parenthesis.body.at(0).at("name")
-    parenthesis.body.at(0).name = name
-    (name + "-start-anchor", 45%, name + "-end-anchor")
+  } else if left-type == "fragment" {
+    (name: left-name, anchor: "west")
+  } else if left-type == "link" {
+    (left-name + "-start-anchor", 45%, left-name + "-end-anchor")
   } else if not left { } else {
     panic("The first element of a parenthesis must be a molecule fragment or a link")
   }

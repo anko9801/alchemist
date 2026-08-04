@@ -228,11 +228,12 @@
 /// - height (float, length): the height of the parenthesis. If align is true, this argument is optional.
 /// - yoffset (float, length, list): the vertical offset of parenthesis. You can also provide a tuple for left and right parenthesis
 /// - xoffset (float, length, list): the horizontal offset of parenthesis. You can also provide a tuple for left and right parenthesis
+/// - left (string): Sometime, it is not convenient to place the left parenthesis at the beginning of the body. In this case, you can specify the name of the fragment or link where the left parenthesis should be placed.
 /// - right (string): Sometime, it is not convenient to place the right parenthesis at the end of the body. In this case, you can specify the name of the fragment or link where the right parenthesis should be placed. It is especially useful when the body end by a cycle. See @polySulfide
 /// - tr (content): the exponent content of the right parenthesis
 /// - br (content): the indice content of the right parenthesis
 /// -> drawable
-#let parenthesis(body, l: "(", r: ")", align: true, resonance: false, height: none, yoffset: none, xoffset: none, right: none, tr: none, br: none) = {
+#let parenthesis(body, l: "(", r: ")", align: true, resonance: false, height: none, yoffset: none, xoffset: none, left: none, right: none, tr: none, br: none) = {
 	if l.len() > 2 {
 		panic("Left can be at most 2 characters")
 	}
@@ -254,6 +255,7 @@
       height: height,
       xoffset: xoffset,
 			yoffset: yoffset,
+			left: left,
 			right: right,
       resonance: resonance,
     ),
