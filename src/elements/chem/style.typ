@@ -20,7 +20,8 @@
   stroke: 0.06em + black,
 
   // ── label clearance ─────────────────────────────────────────────────────────
-  // gap left between a bond end and the box of the label it meets.
+  // gap left between a bond end and the label it meets; it becomes alchemist's
+  // `fragment-margin`, so generated and hand-drawn molecules space bonds alike.
   label-clearance: 0.18em,
 
   // ── special bond styles ───────────────────────────────────────────────────

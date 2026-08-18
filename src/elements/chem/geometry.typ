@@ -1,10 +1,10 @@
 // Shared drawing geometry for the chem renderer.
 //
-// A line that touches an atom — whether it is a bond (skeleton.typ) or an
-// overlay such as a hapto / variable-attachment line (decorations.typ) — must be
-// pulled back so it clears that atom's label. That trimming logic lives here so
-// both callers use exactly the same rule and no line ever runs into a glyph.
-// The small coordinate helpers below are likewise shared by both files.
+// Bonds get their label clearance from alchemist itself (the fragment margin of
+// a placed fragment, see skeleton.typ), but the overlays in decorations.typ —
+// hapto and variable-attachment lines — are raw cetz lines, so they trim
+// themselves against the label box with the helpers below. The small coordinate
+// helpers are shared by both files.
 
 #import "@preview/cetz:0.5.2"
 #import "../../utils/utils.typ": convert-length

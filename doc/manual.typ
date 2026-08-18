@@ -1769,6 +1769,13 @@ ready-to-place content, so you call it directly in your document.
 ```
 #align(center, chem("CC(=O)Oc1ccccc1C(=O)O", format: "smiles"))
 
+The engine is a layout layer, not a second renderer: its coordinates are turned
+into ordinary alchemist elements — each atom is a fragment placed at an absolute
+position, each bond a link between two of them — and #cmd[draw-skeleton] draws
+them. A generated molecule therefore uses the same configuration, the same link
+styles and the same cetz anchors as a hand-drawn one, and both can live in the
+same drawing.
+
 == The DSL <dsl>
 
 The default `format` is the alchemist DSL, a compact line notation:
