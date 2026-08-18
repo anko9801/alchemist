@@ -117,9 +117,6 @@
   )
 }
 
-/// Alias of `fragment`: a hand-drawn molecule built from links and fragments.
-#let molecule = fragment
-
 /// === Hooks
 /// Create a hook in the fragment. It allows to connect links to the place where the hook is.
 /// Hooks are placed at the end of links or at the beginning of the fragment.
