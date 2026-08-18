@@ -2,14 +2,23 @@
 #import "@preview/cetz:0.5.2"
 
 #let left-parenthesis-anchor(parenthesis, ctx) = {
-  let anchor = if parenthesis.body.at(0).type == "fragment" {
-    let name = parenthesis.body.at(0).name
-    parenthesis.body.at(0).name = name
-    (name: name, anchor: "west")
-  } else if parenthesis.body.at(0).type == "link" {
-    let name = parenthesis.body.at(0).at("name")
-    parenthesis.body.at(0).name = name
-    (name + "-start-anchor", 45%, name + "-end-anchor")
+  let left-name = parenthesis.at("left")
+  let left-type = ""
+  if left-name != none {
+    left-type = utils.get-element-type(parenthesis.body, left-name)
+    if left-type == none {
+      panic("The left element of the parenthesis does not exist")
+    }
+  } else {
+    left-type = parenthesis.body.at(0).type
+    left-name = parenthesis.body.at(0).at("name", default: none)
+  }
+  let anchor = if parenthesis.hasplace {
+    none
+  } else if left-type == "fragment" {
+    (name: left-name, anchor: "west")
+  } else if left-type == "link" {
+    (left-name + "-start-anchor", 45%, left-name + "-end-anchor")
   } else if not left { } else {
     panic("The first element of a parenthesis must be a molecule fragment or a link")
   }
@@ -29,7 +38,9 @@
     right-name = parenthesis.body.at(-1).at("name", default: none)
   }
 
-  let anchor = if right-type == "fragment" {
+  let anchor = if parenthesis.hasplace {
+    none
+  } else if right-type == "fragment" {
     (name: right-name, anchor: "east")
   } else if right-type == "link" {
     (right-name + "-start-anchor", 55%, right-name + "-end-anchor")
@@ -86,11 +97,17 @@
         parenthesis,
         ctx,
       )
+      if left-anchor == none {
+        left-anchor = (sub-bounds.low.at(0), sub-v-mid)
+      }
 
       let (ctx, parenthesis, right-anchor) = right-parenthesis-anchor(
         parenthesis,
         ctx,
       )
+      if right-anchor == none {
+        right-anchor = (rel: (sub-width, 0), to: left-anchor)
+      }
 
       let height = parenthesis.at("height")
       if height == none {

@@ -20,6 +20,7 @@
 #let default-ctx = (
   // general
   last-anchor: default-anchor, // keep trace of the place to draw
+  origin-anchor: default-anchor, // this should be considered (0,0) for absolute placed elements
   last-name: "", // last name used to draw
   links: (), // list of links to draw
   hooks: (:), // list of hooks
@@ -138,6 +139,13 @@
         panic("Element " + repr(element) + " has no type")
       } else if element.type == "fragment" {
         (ctx, drawing) = fragment.draw-fragment(element, ctx)
+      } else if element.type == "place" {
+        (ctx, drawing) = fragment.draw-fragment(
+          element.fragment,
+          ctx, centered-on: element.centered-on, 
+          first-anchor: element.anchor, 
+          coord: (to: ctx.origin-anchor.anchor, rel: element.pos)
+        )
       } else if element.type == "link" {
         (ctx, drawing) = link.draw-link(element, ctx)
       } else if element.type == "branch" {
@@ -289,14 +297,20 @@
   top-level: true,
 ) = {
   let result = ((),)
-  let has_element = false
+  let has-element = false
+  let has-place = false
   for element in body {
     if type(element) == dictionary {
-      has_element = true
+      has-element = true
       if element.at("name", default: none) == none {
         if element.type == "fragment" {
           element.name = "fragment-" + str(group-id)
           group-id += 1
+        } else if element.type == "place" {
+          if element.fragment.at("name", default: none) == none {
+            element.fragment.name = "fragment-" + str(group-id)
+            group-id += 1
+          }
         } else if element.type == "link" {
           element.name = "link-" + str(link-id)
           link-id += 1
@@ -307,13 +321,15 @@
       }
       if element.at("body", default: none) != none {
         let child-body
-        (child-body, group-id, link-id, operator-id) = preprocessing(
+        let has-place
+        (child-body, group-id, link-id, operator-id, has-place) = preprocessing(
           element.body,
           group-id: group-id,
           link-id: link-id,
           operator-id: operator-id,
           top-level: false,
         )
+        element.hasplace = has-place
         if element.type == "parenthesis" and element.resonance {
           element.body = child-body
         } else {
@@ -328,6 +344,9 @@
       } else {
         result.at(-1).push(element)
       }
+      if element.type == "place" {
+        has-place = true
+      }
     } else if type(element) == function {
       result.at(-1).push(element)
     } else if element == none {
@@ -338,10 +357,10 @@
       ) + " with value " + repr(element))
     }
   }
-  if top-level and not has_element {
+  if top-level and not has-element {
     panic("The skeletize body must contain at least one element", body)
   }
-  (result, group-id, link-id, operator-id)
+  (result, group-id, link-id, operator-id, has-place)
 }
 
 #let operator-group-name = id => {
@@ -363,7 +382,9 @@
               ctx.last-anchor.anchor,
             )
           }
+          ctx.origin-anchor = ctx.last-anchor
           let last-anchor = ctx.last-anchor
+          
           let (ctx, atoms, cetz-drawing) = draw-fragments-and-link(ctx, body)
           for (links, name, from-mol, ignore-from-margin) in ctx.hooks-links {
             ctx = draw-hooks-links(
@@ -390,11 +411,11 @@
             molecule-bounds,
           )
 
+          let (_, origin-anchor) = cetz.coordinate.resolve(
+            cetz-ctx,
+            last-anchor.anchor,
+          )
           let (translate-x, translate-y) = if after-operator {
-            let (_, origin-anchor) = cetz.coordinate.resolve(
-              cetz-ctx,
-              last-anchor.anchor,
-            )
             (
               origin-anchor.at(0) - molecule-bounds.low.at(0),
               origin-anchor.at(1) - (
@@ -436,9 +457,13 @@
             ),
           )
           scope({
+            set-origin(origin-anchor)
             translate(x: translate-x, y: translate-y)
             draw-link-decoration(ctx).at(1)
             on-layer(2, cetz-drawing)
+          })
+          scope({
+            translate(x: translate-x, y: translate-y)
             let bound-rect = cetz.draw.rect(
               molecule-bounds.low,
               molecule-bounds.high,

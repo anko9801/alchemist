@@ -56,6 +56,47 @@
   )
 })
 
+/// Draw a dative bond between two fragments
+/// #example(```
+/// #skeletize({
+///   fragment("A")
+///   dative()
+///   fragment("B")
+/// })
+///```)
+/// It is possible to change the color and width of the line
+/// with the `stroke` argument
+/// #example(```
+/// #skeletize({
+///   fragment("A")
+///   dative(stroke: red + 5pt)
+///   fragment("B")
+/// })
+///```)
+/// As well as the arrow head used:
+/// #example(```
+/// #skeletize({
+///  fragment("A")
+///  dative(arrow-head: "stealth")
+///  fragment("B")
+///  dative(arrow-head: (symbol: "circle", stroke: red))
+///  fragment("C")
+/// })
+/// ```)
+/// You can use any marking style available in cetz. See https://cetz-package.github.io/docs/basics/marks for more information.
+#let dative = build-link((length, ctx, cetz-ctx, args) => {
+  import cetz.draw: *
+  let arrow-head = args.at("arrow-head", default: ctx.config.dative.arrow-head)
+  let dative-stroke = args.at("stroke", default: ctx.config.dative.stroke)
+  import cetz.draw: *
+  line(
+    (0, 0),
+    (length, 0),
+    stroke: dative-stroke,
+    mark: (end: arrow-head)
+  )
+})
+
 /// Draw a double line between two fragments
 /// #example(```
 /// #skeletize({
